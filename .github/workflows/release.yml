@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing semantic-version tag to release (for recovery only)
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  AQUA_CONFIG: ${{ github.workspace }}/aqua/aqua.yaml
+
+jobs:
+  verify:
+    name: Verify release candidate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-aqua
+      - name: Verify semantic version tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid semantic-version tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}"
+          if [[ $(git cat-file -t "$RELEASE_TAG") != tag ]]; then
+            echo "release tag must be annotated and signed: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          allowed_signers="$RUNNER_TEMP/allowed_signers"
+          gh api users/philband/ssh_signing_keys \
+            --jq '.[] | "philband \(.key)"' > "$allowed_signers"
+          test -s "$allowed_signers"
+          git config gpg.format ssh
+          git config gpg.ssh.allowedSignersFile "$allowed_signers"
+          git verify-tag "$RELEASE_TAG"
+
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$RELEASE_TAG^{commit}" origin/main; then
+            echo "release tag must point to a commit merged into main" >&2
+            exit 1
+          fi
+      - name: Test
+        run: just test
+      - name: Vet
+        run: just lint
+      - name: Reject plaintext and state artifacts
+        run: ./scripts/check-plaintext.sh
+      - name: Vulnerability scan
+        run: just vuln
+
+  release:
+    name: Sign, attest, and publish
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-aqua
+      - name: Require immutable releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          enabled=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.immutable_releases')
+          if [[ "$enabled" != "true" ]]; then
+            echo "GitHub immutable releases must be enabled before publishing." >&2
+            exit 1
+          fi
+      - name: Build, sign, and upload draft release
+        run: goreleaser release --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Verify keyless checksum signature
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          test -s dist/checksums.txt
+          test -s dist/checksums.txt.bundle
+          cosign verify-blob \
+            --bundle dist/checksums.txt.bundle \
+            --certificate-identity-regexp '^https://github\.com/philband/dotenvsec/\.github/workflows/release\.yml@refs/(tags/v[0-9].*|heads/main)$' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            dist/checksums.txt
+      - name: Attest checksummed release artifacts
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-checksums: dist/checksums.txt
+      - name: Verify GitHub build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while read -r _ artifact; do
+            gh attestation verify "dist/$artifact" --repo "$GITHUB_REPOSITORY"
+          done < dist/checksums.txt
+      - name: Publish completed immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest

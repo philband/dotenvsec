@@ -1,0 +1,27 @@
+# Build output
+/bin/
+/dist/
+*.test
+*.prof
+
+# Local settings and sockets
+.env
+*.sock
+
+# Plaintext/editor artifacts
+.env.yaml
+.env.*.yaml
+!.env.sops.yaml
+*.dec.yaml
+*.plaintext
+*~
+*.swp
+.DS_Store
+
+# OpenTofu/Terraform local state
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log

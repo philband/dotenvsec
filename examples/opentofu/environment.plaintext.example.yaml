@@ -1,0 +1,19 @@
+# Never commit this plaintext example with real values. Encrypt as .env.sops.yaml.
+environment:
+  AWS_ACCESS_KEY_ID: "REPLACE"
+  AWS_SECRET_ACCESS_KEY: "REPLACE"
+  TF_ENCRYPTION: |-
+    key_provider "pbkdf2" "current" {
+      passphrase = "REPLACE_WITH_HIGH_ENTROPY_SECRET"
+    }
+    method "aes_gcm" "current" {
+      keys = key_provider.pbkdf2.current
+    }
+    state {
+      method = method.aes_gcm.current
+      enforced = true
+    }
+    plan {
+      method = method.aes_gcm.current
+      enforced = true
+    }

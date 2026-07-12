@@ -1,0 +1,14 @@
+---
+registries:
+  - type: standard
+    ref: v4.535.0
+packages:
+  - name: golang/go@go1.26.5
+  - name: casey/just@1.56.0
+  - name: golangci/golangci-lint@v2.12.2
+  - name: golang/vuln/govulncheck@v1.6.0
+  - name: goreleaser/goreleaser@v2.17.0
+  - name: anchore/syft@v1.46.0
+  - name: sigstore/cosign@v3.1.1
+  - name: rhysd/actionlint@v1.7.12
+  - name: cli/cli@v2.96.0

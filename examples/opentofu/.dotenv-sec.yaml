@@ -1,0 +1,15 @@
+schema: 1
+provider: sops
+source: .env.sops.yaml
+environment:
+  - AWS_ACCESS_KEY_ID
+  - AWS_SECRET_ACCESS_KEY
+  - TF_ENCRYPTION
+unset:
+  - AWS_PROFILE
+allow_dangerous: []
+cache_ttl: 0s
+provider_config:
+  sops_executable: /usr/local/bin/sops
+  sops_sha256: REPLACE_WITH_PINNED_SHA256
+  plugin_path: /usr/local/bin

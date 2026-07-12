@@ -1,0 +1,6 @@
+* @philband
+/.github/ @philband
+/internal/agent/ @philband
+/internal/environment/ @philband
+/internal/provider/ @philband
+/pkg/provider/ @philband

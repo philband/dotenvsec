@@ -1,0 +1,51 @@
+version: 2
+project_name: dotenvsec
+builds:
+  - id: cli
+    main: ./cmd/dotenvsec
+    binary: dotenvsec
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    ignore:
+      - goos: darwin
+        goarch: amd64
+      - goos: linux
+        goarch: arm64
+    flags: [-trimpath]
+  - id: sops-provider
+    main: ./cmd/dotenvsec-provider-sops
+    binary: dotenvsec-provider-sops
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    ignore:
+      - goos: darwin
+        goarch: amd64
+      - goos: linux
+        goarch: arm64
+    flags: [-trimpath]
+archives:
+  - formats: [tar.gz]
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+checksum:
+  name_template: checksums.txt
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: '${artifact}.bundle'
+    args:
+      - sign-blob
+      - '--yes'
+      - '--bundle=${signature}'
+      - '${artifact}'
+sboms:
+  - artifacts: archive
+    documents:
+      - '${artifact}.spdx.sbom'
+release:
+  draft: true
+  prerelease: auto
+changelog:
+  sort: asc
