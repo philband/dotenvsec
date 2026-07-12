@@ -4,7 +4,7 @@ Releases are built only by GitHub Actions from annotated, SSH-signed semantic ve
 
 ## One-time repository setup
 
-1. Enable **Settings → General → Releases → Immutable releases** before creating the first release. The workflow verifies the API setting and fails before building a draft when it is disabled.
+1. Enable **Settings → General → Releases → Enable release immutability** before creating the first release. GitHub enforces immutability when the completed draft is published.
 2. Enable private vulnerability reporting, Dependabot alerts, secret scanning, push protection, and CodeQL default/setup alerts.
 3. Protect `main`: require pull requests, require the CI and CodeQL checks, require conversation resolution, disallow force pushes/deletion, and require linear history.
 4. Keep Actions permissions at the restrictive default. The release workflow declares only `contents: write`, `id-token: write`, and `attestations: write` for keyless signing, release upload, and GitHub provenance.
