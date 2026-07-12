@@ -26,4 +26,4 @@ Install the static hook only from the trusted binary:
 eval "$(/absolute/path/dotenvsec hook zsh)"
 ```
 
-Use `bash` instead of `zsh` where appropriate. The hook never sources repository files. For safer child-only use, prefer `dotenvsec exec -- command`; for an isolated interactive session, use `dotenvsec shell`.
+Use `bash` instead of `zsh` where appropriate. The hook never sources repository files. For safer child-only use, prefer `dotenvsec exec -- executable`; `exec` requires a real executable rather than a shell alias. For an isolated interactive session with aliases, use `dotenvsec shell`.

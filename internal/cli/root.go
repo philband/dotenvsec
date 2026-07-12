@@ -165,6 +165,10 @@ func newExec() *cobra.Command {
 				path, args = args[0], args[1:]
 			}
 		}
+		args, err := normalizeExecArguments(args)
+		if err != nil {
+			return err
+		}
 		if path == "" {
 			path, _ = os.Getwd()
 		}
@@ -180,6 +184,16 @@ func newExec() *cobra.Command {
 		return syscall.Exec(executable, args, app.Environment(os.Environ(), loaded))
 	}}
 	return cmd
+}
+
+func normalizeExecArguments(args []string) ([]string, error) {
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		return nil, errors.New("command is required after exec")
+	}
+	return args, nil
 }
 
 func newShell() *cobra.Command {
