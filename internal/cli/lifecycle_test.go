@@ -111,6 +111,27 @@ func TestStableLocaleEnvironment(t *testing.T) {
 	}
 }
 
+func TestSOPSEnvironmentUsesConfiguredIdentities(t *testing.T) {
+	environment := sopsEnvironment(
+		[]string{"PATH=/bin", "SOPS_AGE_KEY_FILE=/untrusted/fallback"},
+		[]string{"/private/identities.txt"},
+	)
+	joined := strings.Join(environment, "\n")
+	if strings.Contains(joined, "/untrusted/fallback") {
+		t.Fatalf("fallback identity path was not replaced:\n%s", joined)
+	}
+	if !strings.Contains(joined, "SOPS_AGE_KEY_FILE=/private/identities.txt") {
+		t.Fatalf("configured identity path is missing:\n%s", joined)
+	}
+}
+
+func TestSOPSEnvironmentPreservesFallbackWithoutSettings(t *testing.T) {
+	environment := sopsEnvironment([]string{"SOPS_AGE_KEY_FILE=/explicit/fallback"}, nil)
+	if !strings.Contains(strings.Join(environment, "\n"), "SOPS_AGE_KEY_FILE=/explicit/fallback") {
+		t.Fatal("explicit fallback identity path was removed")
+	}
+}
+
 func fakeSOPS(t *testing.T, fail bool) (string, string) {
 	t.Helper()
 	directory := t.TempDir()
