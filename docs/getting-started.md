@@ -63,8 +63,8 @@ Local settings are stored at:
 - macOS: `~/Library/Application Support/dotenvsec/settings.yaml`
 - Linux: `${XDG_CONFIG_HOME:-$HOME/.config}/dotenvsec/settings.yaml`
 
-After the first dotenvsec command has created the file, add the identity path
-without removing the generated `providers` section:
+For standard age or Secure Enclave identities, add the private consolidated file
+path without removing generated settings:
 
 ```yaml
 schema: 1
@@ -79,24 +79,25 @@ providers:
 
 Never commit local settings or private identities.
 
-For YubiKey identities, connect only a locally authorized key and export its
-plugin identity reference into the consolidated file. This output is private
-local configuration even though the hardware still protects the key:
+YubiKey identities are managed automatically. On the first `edit`, `exec`,
+`shell`, or hook activation that needs decryption, dotenvsec:
 
-```sh
-IDENTITY_DIR="$HOME/Library/Application Support/dotenvsec"
-IDENTITY_FILE="$IDENTITY_DIR/yubikey-identities.txt"
-mkdir -p "$IDENTITY_DIR"
-umask 077
-LANG=C LC_ALL=C age-plugin-yubikey -i > "$IDENTITY_FILE"
-chmod 0600 "$IDENTITY_FILE"
-```
+1. Runs the trusted `age-plugin-yubikey -i` executable from the repository's
+  approved plugin path.
+2. Matches connected identity metadata against active public recipients in the
+  repository manifest.
+3. Atomically adds newly discovered matching identity references to a private
+  managed identity file and configures its absolute path in local settings.
+4. Gives SOPS a temporary mode-`0600` identity file containing non-YubiKey
+  identities plus only the matching YubiKeys connected for that operation.
+5. Deletes the temporary file immediately after SOPS exits.
 
-If this user controls more than one authorized YubiKey, connect each additional
-key separately and append its `-i` output. A user does not need private identity
-references for every public recipient in the repository—only for devices that
-user is authorized to operate. Set `identity_paths` to the absolute value of
-`IDENTITY_FILE`.
+Connect one locally authorized YubiKey before the first decryption. Connect a
+different authorized key on a later operation to enroll it automatically. No
+manual `age-plugin-yubikey -i` command is needed. Discovery does not request a
+PIN or touch; SOPS prompts only when it decrypts with a connected matching key.
+If no connected key matches an active recipient, dotenvsec fails before SOPS
+instead of prompting for absent devices.
 
 ## 4. Initialize a repository scope
 
@@ -293,7 +294,10 @@ package upgrade.
 
 Check that `identity_paths` points to the correct consolidated private identity
 file, its mode is `0600`, and the required hardware plugin is installed. For
-YubiKeys, decryption may require the configured PIN and touch policy.
+standard age or Secure Enclave identities, configure the private file explicitly.
+For YubiKeys, connect a device whose public recipient is active in the repository;
+dotenvsec discovers and enrolls its identity reference automatically. Decryption
+may then require the configured PIN and touch policy.
 
 ### `age-plugin-yubikey` is not found during `exec` or `shell`
 

@@ -126,12 +126,17 @@ func Load(ctx context.Context, path string) (Loaded, error) {
 			return Loaded{prepared.Identity, prepared.Config, prepared.Manifest, values, unset, prepared.TrustHash, prepared.ScopeKey}, nil
 		}
 	}
+	identityPath, cleanupIdentities, err := PrepareSOPSIdentities(ctx, &prepared)
+	if err != nil {
+		return Loaded{}, err
+	}
+	defer cleanupIdentities()
 	providerConfig := make(map[string]string, len(prepared.Config.ProviderConfig)+1)
 	for key, value := range prepared.Config.ProviderConfig {
 		providerConfig[key] = value
 	}
-	if len(prepared.Settings.IdentityPaths) > 0 {
-		providerConfig["identity_paths"] = strings.Join(prepared.Settings.IdentityPaths, ",")
+	if identityPath != "" {
+		providerConfig["identity_paths"] = identityPath
 	}
 	req := protocol.Request{Version: protocol.ProtocolVersion, Scope: protocol.Scope{RepositoryID: prepared.Identity.RepositoryID, RelativePath: prepared.Identity.RelativePath, WorktreeRoot: prepared.Identity.WorktreeRoot}, Source: prepared.Source, ExpectedNames: prepared.Config.Environment, Unset: prepared.Config.Unset, Config: providerConfig}
 	response, err := localprovider.Run(ctx, prepared.Provider, req)
