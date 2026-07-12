@@ -41,15 +41,15 @@ For YubiKey and Apple Secure Enclave requirements, read
 Register `dotenvsec-provider-sops`, not the `sops` executable:
 
 ```sh
-PROVIDER="$(realpath "$(command -v dotenvsec-provider-sops)")"
+PROVIDER="$(command -v dotenvsec-provider-sops)"
 PROVIDER_SHA256="$(shasum -a 256 "$PROVIDER" | awk '{print $1}')"
 dotenvsec provider register sops "$PROVIDER" --sha256 "$PROVIDER_SHA256"
 dotenvsec provider list
 ```
 
 Provider registration is per user and writes the checksum-pinned executable to
-dotenvsec's local settings. Resolving the path is required for Homebrew because
-the registry rejects symlinks such as `/opt/homebrew/bin/dotenvsec-provider-sops`.
+dotenvsec's local settings. Registration resolves package-manager symlinks and
+stores only the canonical regular executable.
 
 ## 3. Configure decryption identities
 
@@ -69,6 +69,7 @@ removing the generated `providers` section:
 schema: 1
 identity_paths:
   - /absolute/path/to/consolidated-age-identities.txt
+editor: code --wait --reuse-window
 providers:
   sops:
     executable: /absolute/path/to/dotenvsec-provider-sops
@@ -162,6 +163,30 @@ or scope policy invalidate that approval and require another review and
 
 ## 6. Enter values and verify
 
+Choose the editor once in local user settings. From a VS Code integrated
+terminal, the `vscode` preset opens the temporary decrypted document in the
+current VS Code window and waits until that tab is closed:
+
+```sh
+dotenvsec settings editor vscode
+```
+
+The preset stores `code --wait --reuse-window`. Any other SOPS-compatible editor
+command can be selected globally by passing it as one quoted argument:
+
+```sh
+dotenvsec settings editor 'nvim --nofork'
+```
+
+Show the current default with `dotenvsec settings editor`. Clear it and return
+to the ambient `SOPS_EDITOR` or `EDITOR` environment with:
+
+```sh
+dotenvsec settings editor --clear
+```
+
+Editor selection is local per user and is never controlled by repository files.
+
 Open the encrypted document through the pinned SOPS executable:
 
 ```sh
@@ -227,6 +252,26 @@ the previous local approval.
 The repository pins the SOPS executable used during initialization. Review the
 package upgrade, update the pinned path/checksum through a trusted process, and
 approve the changed policy again. Never bypass the mismatch.
+
+### Provider invalid after `brew upgrade`
+
+Homebrew removes the old versioned Cellar directory after upgrading dotenvsec.
+Re-register the newly installed provider, review the changed provider checksum,
+and approve each affected repository again:
+
+```sh
+PROVIDER="$(command -v dotenvsec-provider-sops)"
+PROVIDER_SHA256="$(shasum -a 256 "$PROVIDER" | awk '{print $1}')"
+dotenvsec provider register sops "$PROVIDER" --sha256 "$PROVIDER_SHA256"
+dotenvsec provider list
+
+cd /path/to/repository
+dotenvsec status
+dotenvsec allow
+```
+
+Re-approval is intentional: the locally trusted executable and its checksum
+changed. Do not automate `allow` as part of a package upgrade.
 
 ### Decryption cannot find an identity
 

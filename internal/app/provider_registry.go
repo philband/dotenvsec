@@ -13,7 +13,11 @@ func RegisterProvider(id, executable, expectedSHA string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	actual, err := localprovider.FileSHA256(absolute)
+	canonical, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	actual, err := localprovider.FileSHA256(canonical)
 	if err != nil {
 		return "", err
 	}
@@ -24,7 +28,7 @@ func RegisterProvider(id, executable, expectedSHA string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	entry := config.ProviderEntry{Executable: absolute, SHA256: actual}
+	entry := config.ProviderEntry{Executable: canonical, SHA256: actual}
 	if err := localprovider.Verify(entry); err != nil {
 		return "", err
 	}

@@ -115,6 +115,7 @@ func TestSOPSEnvironmentUsesConfiguredIdentities(t *testing.T) {
 	environment := sopsEnvironment(
 		[]string{"PATH=/bin", "SOPS_AGE_KEY_FILE=/untrusted/fallback"},
 		[]string{"/private/identities.txt"},
+		"",
 	)
 	joined := strings.Join(environment, "\n")
 	if strings.Contains(joined, "/untrusted/fallback") {
@@ -126,9 +127,53 @@ func TestSOPSEnvironmentUsesConfiguredIdentities(t *testing.T) {
 }
 
 func TestSOPSEnvironmentPreservesFallbackWithoutSettings(t *testing.T) {
-	environment := sopsEnvironment([]string{"SOPS_AGE_KEY_FILE=/explicit/fallback"}, nil)
+	environment := sopsEnvironment([]string{"SOPS_AGE_KEY_FILE=/explicit/fallback"}, nil, "")
 	if !strings.Contains(strings.Join(environment, "\n"), "SOPS_AGE_KEY_FILE=/explicit/fallback") {
 		t.Fatal("explicit fallback identity path was removed")
+	}
+}
+
+func TestSOPSEnvironmentUsesConfiguredEditor(t *testing.T) {
+	environment := sopsEnvironment(
+		[]string{"EDITOR=vim", "SOPS_EDITOR=nano"},
+		nil,
+		"code --wait --reuse-window",
+	)
+	joined := strings.Join(environment, "\n")
+	if strings.Contains(joined, "SOPS_EDITOR=nano") {
+		t.Fatalf("ambient SOPS editor was not replaced:\n%s", joined)
+	}
+	if !strings.Contains(joined, "SOPS_EDITOR=code --wait --reuse-window") {
+		t.Fatalf("configured editor is missing:\n%s", joined)
+	}
+	if !strings.Contains(joined, "EDITOR=vim") {
+		t.Fatalf("unrelated editor fallback was removed:\n%s", joined)
+	}
+}
+
+func TestSOPSEnvironmentPreservesEditorFallbackWithoutSetting(t *testing.T) {
+	environment := sopsEnvironment([]string{"SOPS_EDITOR=nvim --wait"}, nil, "")
+	if !strings.Contains(strings.Join(environment, "\n"), "SOPS_EDITOR=nvim --wait") {
+		t.Fatal("ambient SOPS editor was removed")
+	}
+}
+
+func TestNormalizeEditor(t *testing.T) {
+	for _, preset := range []string{"vscode", "code", " VSCode "} {
+		actual, err := normalizeEditor(preset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actual != "code --wait --reuse-window" {
+			t.Fatalf("normalizeEditor(%q) = %q", preset, actual)
+		}
+	}
+	custom, err := normalizeEditor("nvim --nofork")
+	if err != nil || custom != "nvim --nofork" {
+		t.Fatalf("custom editor = %q, %v", custom, err)
+	}
+	if _, err := normalizeEditor("bad\ncommand"); err == nil {
+		t.Fatal("expected control-character rejection")
 	}
 }
 
