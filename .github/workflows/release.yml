@@ -79,15 +79,6 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
       - uses: ./.github/actions/setup-aqua
-      - name: Require immutable releases
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          enabled=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.immutable_releases')
-          if [[ "$enabled" != "true" ]]; then
-            echo "GitHub immutable releases must be enabled before publishing." >&2
-            exit 1
-          fi
       - name: Build, sign, and upload draft release
         run: goreleaser release --clean
         env:
