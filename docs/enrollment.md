@@ -1,5 +1,9 @@
 # Hardware enrollment
 
+After obtaining public hardware recipients and storing their private plugin
+identity stanzas locally, return to [Getting started](getting-started.md) to
+initialize the repository with repeatable `-r ID=PUBLIC_RECIPIENT` flags.
+
 ## YubiKey
 
 Use a current, checksum-verified `age-plugin-yubikey`. Generate the identity directly on the intended device with PIN policy `always` and touch policy `always`; record the public recipient in `.dotenv-sec/recipients.yaml` with a stable device ID and operator attestation. Test uncached decryption, cancellation, wrong/missing hardware, and a second authorized device before production use.

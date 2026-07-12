@@ -1,5 +1,8 @@
 # Configuration
 
+For the complete provider, identity, initialization, Git tracking, and approval
+sequence, start with [Getting started](getting-started.md).
+
 ## Scope
 
 ```yaml

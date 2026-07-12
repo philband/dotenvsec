@@ -97,19 +97,26 @@ func LoadScope(path string) (Scope, error) {
 	if err := DecodeFile(path, &c); err != nil {
 		return c, err
 	}
-	if c.Schema != ScopeSchemaVersion {
-		return c, fmt.Errorf("unsupported scope schema %d", c.Schema)
-	}
-	if c.Provider == "" || c.Source == "" {
-		return c, errors.New("provider and source are required")
-	}
-	if len(c.Environment) > MaxEnvironmentVariables {
-		return c, errors.New("too many environment names")
-	}
-	if err := validateNameLists(c.Environment, c.Unset, c.AllowDangerous); err != nil {
+	if err := ValidateScope(c); err != nil {
 		return c, err
 	}
 	return c, nil
+}
+
+func ValidateScope(c Scope) error {
+	if c.Schema != ScopeSchemaVersion {
+		return fmt.Errorf("unsupported scope schema %d", c.Schema)
+	}
+	if c.Provider == "" || c.Source == "" {
+		return errors.New("provider and source are required")
+	}
+	if len(c.Environment) > MaxEnvironmentVariables {
+		return errors.New("too many environment names")
+	}
+	if err := validateNameLists(c.Environment, c.Unset, c.AllowDangerous); err != nil {
+		return err
+	}
+	return nil
 }
 
 func LoadRecipients(path string) (RecipientManifest, error) {
@@ -117,36 +124,43 @@ func LoadRecipients(path string) (RecipientManifest, error) {
 	if err := DecodeFile(path, &m); err != nil {
 		return m, err
 	}
+	if err := ValidateRecipients(m); err != nil {
+		return m, err
+	}
+	return m, nil
+}
+
+func ValidateRecipients(m RecipientManifest) error {
 	if m.Schema != RecipientsSchemaVersion {
-		return m, fmt.Errorf("unsupported recipients schema %d", m.Schema)
+		return fmt.Errorf("unsupported recipients schema %d", m.Schema)
 	}
 	ids, recipients := map[string]bool{}, map[string]bool{}
 	for _, r := range m.Recipients {
 		if r.ID == "" || r.Owner == "" || r.Recipient == "" {
-			return m, errors.New("recipient id, owner, and recipient are required")
+			return errors.New("recipient id, owner, and recipient are required")
 		}
 		if strings.ContainsAny(r.ID+r.Owner+r.Recipient, "\r\n") {
-			return m, errors.New("recipient fields must not contain newlines")
+			return errors.New("recipient fields must not contain newlines")
 		}
 		if ids[r.ID] {
-			return m, fmt.Errorf("duplicate recipient id %q", r.ID)
+			return fmt.Errorf("duplicate recipient id %q", r.ID)
 		}
 		ids[r.ID] = true
 		if recipients[r.Recipient] {
-			return m, errors.New("duplicate public recipient")
+			return errors.New("duplicate public recipient")
 		}
 		recipients[r.Recipient] = true
 		if r.Status != "active" && r.Status != "revoked" {
-			return m, fmt.Errorf("recipient %q has invalid status", r.ID)
+			return fmt.Errorf("recipient %q has invalid status", r.ID)
 		}
 		if r.Plugin != "yubikey" && r.Plugin != "secure-enclave" && r.Plugin != "age" {
-			return m, fmt.Errorf("recipient %q uses unsupported plugin", r.ID)
+			return fmt.Errorf("recipient %q uses unsupported plugin", r.ID)
 		}
 		if strings.HasPrefix(r.Recipient, "age1tag") {
-			return m, fmt.Errorf("recipient %q uses an unverified age tag format", r.ID)
+			return fmt.Errorf("recipient %q uses an unverified age tag format", r.ID)
 		}
 	}
-	return m, nil
+	return nil
 }
 
 func ParseEnvironment(data []byte) (EnvironmentDocument, error) {

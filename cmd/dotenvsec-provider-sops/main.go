@@ -67,7 +67,7 @@ func run() error {
 	cmd := exec.CommandContext(ctx, sops, "decrypt", "--input-type", "yaml", "--output-type", "yaml", req.Source)
 	cmd.Dir = req.Scope.WorktreeRoot
 	cmd.Stderr = os.Stderr
-	cmd.Env = []string{"HOME=" + os.Getenv("HOME"), "USER=" + os.Getenv("USER"), "PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"}
+	cmd.Env = []string{"HOME=" + os.Getenv("HOME"), "USER=" + os.Getenv("USER"), "PATH=" + os.Getenv("PATH"), "LANG=C", "LC_ALL=C"}
 	if identities := req.Config["identity_paths"]; identities != "" {
 		cmd.Env = append(cmd.Env, "SOPS_AGE_KEY_FILE="+identities)
 	}
