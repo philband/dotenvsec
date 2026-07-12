@@ -27,6 +27,10 @@ func Execute() error { return newRoot().Execute() }
 func newRoot() *cobra.Command {
 	root := &cobra.Command{Use: "dotenvsec", Short: "Fail-closed SOPS environment loading", SilenceUsage: true, SilenceErrors: true}
 	root.Version = version
+	root.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
+		_, err := app.RefreshBundledProvider()
+		return err
+	}
 	root.AddCommand(newAllow(), newStatus(), newDoctor(), newHook(), newActivate(), newExec(), newShell(), newProvider(), newSettings(), newAgent(), newInit(), newEdit(), newRekey())
 	return root
 }
