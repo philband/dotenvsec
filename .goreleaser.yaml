@@ -13,6 +13,8 @@ builds:
       - goos: linux
         goarch: arm64
     flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/philband/dotenvsec/internal/cli.version={{ .Version }}
   - id: sops-provider
     main: ./cmd/dotenvsec-provider-sops
     binary: dotenvsec-provider-sops

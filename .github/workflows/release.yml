@@ -83,6 +83,21 @@ jobs:
         run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ github.token }}
+      - name: Verify embedded CLI version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          mapfile -t binaries < <(find dist -type f -path '*/cli_linux_amd64*/dotenvsec' -perm -111)
+          if [[ ${#binaries[@]} -ne 1 ]]; then
+            echo "expected exactly one Linux amd64 dotenvsec binary, found ${#binaries[@]}" >&2
+            exit 1
+          fi
+          expected="dotenvsec version ${RELEASE_TAG#v}"
+          actual="$("${binaries[0]}" --version)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "embedded version mismatch: expected '$expected', got '$actual'" >&2
+            exit 1
+          fi
       - name: Verify keyless checksum signature
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}

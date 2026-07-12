@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/philband/dotenvsec/internal/app"
 	"github.com/philband/dotenvsec/internal/config"
@@ -19,15 +21,23 @@ import (
 
 func newInit() *cobra.Command {
 	var names []string
-	var recipient, recipientID, owner, plugin, sopsPath string
-	cmd := &cobra.Command{Use: "init [path]", Args: cobra.MaximumNArgs(1), Short: "Initialize an encrypted environment scope", RunE: func(cmd *cobra.Command, args []string) error {
+	var recipientSpecs []string
+	var owner, plugin, sopsPath string
+	cmd := &cobra.Command{Use: "init [path]", Aliases: []string{"i"}, Args: cobra.MaximumNArgs(1), Short: "Initialize an encrypted environment scope", RunE: func(cmd *cobra.Command, args []string) error {
 		dir := pathArg(args)
 		absolute, err := filepath.Abs(dir)
 		if err != nil {
 			return err
 		}
-		if len(names) == 0 || recipient == "" {
+		if len(names) == 0 || len(recipientSpecs) == 0 {
 			return errors.New("at least one --name and --recipient are required")
+		}
+		if err := validateInitPlugin(plugin); err != nil {
+			return err
+		}
+		manifestRecipients, encryptionRecipients, err := parseInitRecipients(recipientSpecs, owner, plugin)
+		if err != nil {
+			return err
 		}
 		if sopsPath == "" {
 			sopsPath = defaultSOPS()
@@ -35,24 +45,25 @@ func newInit() *cobra.Command {
 		if sopsPath == "" {
 			return errors.New("sops not found")
 		}
-		for _, target := range []string{filepath.Join(absolute, scope.ConfigName), filepath.Join(absolute, ".env.sops.yaml")} {
+		recipientsDir := filepath.Join(absolute, ".dotenv-sec")
+		recipientsPath := filepath.Join(recipientsDir, "recipients.yaml")
+		sopsConfigPath := filepath.Join(absolute, ".sops.yaml")
+		scopeConfigPath := filepath.Join(absolute, scope.ConfigName)
+		environmentPath := filepath.Join(absolute, ".env.sops.yaml")
+		for _, target := range []string{recipientsDir, sopsConfigPath, scopeConfigPath, environmentPath} {
 			if _, err := os.Stat(target); err == nil {
-				return fmt.Errorf("refusing to overwrite %s", target)
+				return fmt.Errorf("refusing to overwrite %s; remove only confirmed partial init output before retrying", target)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
 			}
 		}
-		manifest := config.RecipientManifest{Schema: 1, Recipients: []config.Recipient{{ID: recipientID, Owner: owner, Status: "active", Plugin: plugin, Recipient: recipient, Policy: defaultPolicy(plugin), Attestation: "operator supplied public recipient"}}}
-		if err := os.MkdirAll(filepath.Join(absolute, ".dotenv-sec"), 0700); err != nil {
+		manifest := config.RecipientManifest{Schema: 1, Recipients: manifestRecipients}
+		if err := config.ValidateRecipients(manifest); err != nil {
 			return err
 		}
 		manifestData, _ := config.Marshal(manifest)
-		if err := atomicWrite(filepath.Join(absolute, ".dotenv-sec", "recipients.yaml"), manifestData, 0644); err != nil {
-			return err
-		}
 		sopsConfig, err := recipients.GenerateSOPS(manifest, ".env.sops.yaml")
 		if err != nil {
-			return err
-		}
-		if err := atomicWrite(filepath.Join(absolute, ".sops.yaml"), []byte(sopsConfig), 0644); err != nil {
 			return err
 		}
 		hash, err := provider.FileSHA256(sopsPath)
@@ -60,37 +71,121 @@ func newInit() *cobra.Command {
 			return err
 		}
 		scopeConfig := config.Scope{Schema: 1, Provider: "sops", Source: ".env.sops.yaml", Environment: names, ProviderConfig: map[string]string{"sops_executable": sopsPath, "sops_sha256": hash, "plugin_path": filepath.Dir(sopsPath)}}
-		scopeData, _ := config.Marshal(scopeConfig)
-		if err := atomicWrite(filepath.Join(absolute, scope.ConfigName), scopeData, 0644); err != nil {
+		if err := config.ValidateScope(scopeConfig); err != nil {
 			return err
 		}
+		scopeData, _ := config.Marshal(scopeConfig)
 		doc := config.EnvironmentDocument{Environment: map[string]string{}}
 		for _, name := range names {
 			doc.Environment[name] = "CHANGE_ME"
 		}
 		plain, _ := config.Marshal(doc)
 		defer zeroBytes(plain)
-		command := exec.CommandContext(cmd.Context(), sopsPath, "encrypt", "--input-type", "yaml", "--output-type", "yaml", "--age", recipient, "/dev/stdin")
-		command.Dir = absolute
-		command.Stdin = bytes.NewReader(plain)
-		command.Stderr = os.Stderr
-		encrypted, err := command.Output()
+		stagingDir, err := os.MkdirTemp(absolute, ".dotenv-sec-init-*")
 		if err != nil {
-			return errors.New("sops encryption failed")
-		}
-		if err := atomicWrite(filepath.Join(absolute, ".env.sops.yaml"), encrypted, 0644); err != nil {
 			return err
 		}
-		fmt.Println("scope initialized; review files, git add them, register provider, then run allow")
+		defer func() { _ = os.RemoveAll(stagingDir) }()
+		stagedSOPSConfig := filepath.Join(stagingDir, ".sops.yaml")
+		if err := os.WriteFile(stagedSOPSConfig, sopsConfig, 0600); err != nil {
+			return err
+		}
+		command := exec.CommandContext(cmd.Context(), sopsPath, "--config", stagedSOPSConfig, "encrypt", "--filename-override", ".env.sops.yaml", "--input-type", "yaml", "--output-type", "yaml", "--age", strings.Join(encryptionRecipients, ","), "/dev/stdin")
+		command.Dir = absolute
+		command.Stdin = bytes.NewReader(plain)
+		command.Env = stableLocaleEnvironment(os.Environ())
+		var sopsError bytes.Buffer
+		command.Stderr = &sopsError
+		encrypted, err := command.Output()
+		if err != nil {
+			message := strings.TrimSpace(sopsError.String())
+			if message == "" {
+				return fmt.Errorf("sops encryption failed: %w", err)
+			}
+			return fmt.Errorf("sops encryption failed: %s", message)
+		}
+		if err := installInitFiles(recipientsDir, []initFile{
+			{recipientsPath, manifestData, 0644},
+			{sopsConfigPath, sopsConfig, 0644},
+			{scopeConfigPath, scopeData, 0644},
+			{environmentPath, encrypted, 0644},
+		}); err != nil {
+			return err
+		}
+		fmt.Println("scope initialized; review and git add all four files, then run dotenvsec allow")
 		return nil
 	}}
-	cmd.Flags().StringSliceVar(&names, "name", nil, "expected environment variable (repeatable)")
-	cmd.Flags().StringVar(&recipient, "recipient", "", "public age/plugin recipient")
-	cmd.Flags().StringVar(&recipientID, "recipient-id", "primary-device", "stable recipient/device ID")
-	cmd.Flags().StringVar(&owner, "owner", os.Getenv("USER"), "recipient owner")
-	cmd.Flags().StringVar(&plugin, "plugin", "age", "age, yubikey, or secure-enclave")
-	cmd.Flags().StringVar(&sopsPath, "sops", "", "absolute SOPS executable")
+	cmd.Flags().StringSliceVarP(&names, "name", "n", nil, "expected environment variable (repeatable or comma-separated)")
+	cmd.Flags().StringSliceVarP(&recipientSpecs, "recipient", "r", nil, "recipient as ID=PUBLIC_RECIPIENT (repeatable)")
+	cmd.Flags().StringVarP(&owner, "owner", "o", os.Getenv("USER"), "recipient owner")
+	cmd.Flags().StringVarP(&plugin, "plugin", "p", "age", "age, yubikey, or secure-enclave")
+	cmd.Flags().StringVarP(&sopsPath, "sops", "s", "", "absolute SOPS executable")
 	return cmd
+}
+
+var recipientIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+func parseInitRecipients(specs []string, owner, plugin string) ([]config.Recipient, []string, error) {
+	manifest := make([]config.Recipient, 0, len(specs))
+	encryption := make([]string, 0, len(specs))
+	ids, recipients := map[string]struct{}{}, map[string]struct{}{}
+	for _, spec := range specs {
+		id, recipient, found := strings.Cut(spec, "=")
+		if !found || !recipientIDPattern.MatchString(id) || recipient == "" {
+			return nil, nil, fmt.Errorf("invalid --recipient %q; expected ID=PUBLIC_RECIPIENT", spec)
+		}
+		if strings.IndexFunc(recipient, unicode.IsControl) >= 0 {
+			return nil, nil, fmt.Errorf("recipient %q contains a control character", id)
+		}
+		if _, duplicate := ids[id]; duplicate {
+			return nil, nil, fmt.Errorf("duplicate recipient ID %q", id)
+		}
+		if _, duplicate := recipients[recipient]; duplicate {
+			return nil, nil, fmt.Errorf("duplicate public recipient for %q", id)
+		}
+		ids[id], recipients[recipient] = struct{}{}, struct{}{}
+		manifest = append(manifest, config.Recipient{ID: id, Owner: owner, Status: "active", Plugin: plugin, Recipient: recipient, Policy: defaultPolicy(plugin), Attestation: "operator supplied public recipient"})
+		encryption = append(encryption, recipient)
+	}
+	return manifest, encryption, nil
+}
+
+func validateInitPlugin(plugin string) error {
+	switch plugin {
+	case "age", "yubikey", "secure-enclave":
+		return nil
+	default:
+		return fmt.Errorf("unsupported recipient plugin %q", plugin)
+	}
+}
+
+type initFile struct {
+	path string
+	data []byte
+	mode os.FileMode
+}
+
+func installInitFiles(recipientsDir string, files []initFile) (err error) {
+	if err := os.Mkdir(recipientsDir, 0700); err != nil {
+		return err
+	}
+	installed := make([]string, 0, len(files))
+	defer func() {
+		if err == nil {
+			return
+		}
+		for _, path := range installed {
+			_ = os.Remove(path)
+		}
+		_ = os.Remove(recipientsDir)
+	}()
+	for _, file := range files {
+		if err = atomicWrite(file.path, file.data, file.mode); err != nil {
+			return err
+		}
+		installed = append(installed, file.path)
+	}
+	return nil
 }
 
 func newEdit() *cobra.Command {
@@ -128,6 +223,7 @@ func newRekey() *cobra.Command {
 		}
 		decrypt := exec.CommandContext(cmd.Context(), sopsPath, "decrypt", "--input-type", "yaml", "--output-type", "yaml", prepared.Source)
 		decrypt.Stderr = os.Stderr
+		decrypt.Env = stableLocaleEnvironment(os.Environ())
 		plain, err := decrypt.Output()
 		if err != nil {
 			return errors.New("cannot decrypt existing source")
@@ -137,6 +233,7 @@ func newRekey() *cobra.Command {
 		encrypt.Dir = prepared.Identity.Directory
 		encrypt.Stdin = bytes.NewReader(plain)
 		encrypt.Stderr = os.Stderr
+		encrypt.Env = stableLocaleEnvironment(os.Environ())
 		replacement, err := encrypt.Output()
 		if err != nil {
 			return errors.New("cannot encrypt replacement")
@@ -148,6 +245,7 @@ func newRekey() *cobra.Command {
 		defer func() { _ = os.Remove(tmp) }()
 		verify := exec.CommandContext(cmd.Context(), sopsPath, "decrypt", "--input-type", "yaml", "--output-type", "yaml", tmp)
 		verify.Stderr = os.Stderr
+		verify.Env = stableLocaleEnvironment(os.Environ())
 		verified, err := verify.Output()
 		zeroBytes(verified)
 		if err != nil {

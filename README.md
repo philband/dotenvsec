@@ -19,12 +19,15 @@ Scopes never merge. The nearest configured ancestor wins, discovery stops at the
 
 ## Quick start
 
-1. Install `sops` and an age identity plugin (`age-plugin-yubikey` or `age-plugin-se`).
-2. Register the bundled SOPS provider or an absolute checksum-pinned provider executable.
-3. Run `dotenvsec init`, then `dotenvsec allow`.
-4. Install `eval "$(dotenvsec hook zsh)"` (or `bash`) in the shell startup file.
+1. Install dotenvsec, its SOPS provider, SOPS, and an age implementation/plugin.
+2. Register `dotenvsec-provider-sops` locally and configure the private identity path.
+3. Inside a Git worktree, initialize explicitly with names and paired public recipients, for example `dotenvsec i -n API_TOKEN -r primary=age1...`.
+4. Review and stage all four generated files, then run `dotenvsec allow` and `dotenvsec edit`.
+5. Verify with `dotenvsec doctor` and child-only `dotenvsec exec` before installing a shell hook.
 
-Run `dotenvsec --help` and read `docs/threat-model.md`, `docs/configuration.md`, and `docs/recovery.md` before use.
+Follow the complete [repository onboarding guide](docs/getting-started.md). Run
+`dotenvsec --help` and read `docs/threat-model.md`, `docs/configuration.md`, and
+`docs/recovery.md` before use.
 
 Release artifacts are immutable, checksum-signed with keyless Cosign, accompanied by SPDX SBOMs, and recorded with GitHub build-provenance attestations. Maintainers should follow `docs/releasing.md`.
 

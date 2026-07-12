@@ -285,8 +285,19 @@ func displayRoot(path string) string {
 func runAttached(ctx context.Context, executable string, args ...string) error {
 	command := exec.CommandContext(ctx, executable, args...)
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
-	command.Env = os.Environ()
+	command.Env = stableLocaleEnvironment(os.Environ())
 	return command.Run()
+}
+
+func stableLocaleEnvironment(base []string) []string {
+	out := make([]string, 0, len(base)+2)
+	for _, item := range base {
+		if strings.HasPrefix(item, "LANG=") || strings.HasPrefix(item, "LC_ALL=") {
+			continue
+		}
+		out = append(out, item)
+	}
+	return append(out, "LANG=C", "LC_ALL=C")
 }
 func defaultSOPS() string {
 	if runtime.GOOS == "darwin" {
