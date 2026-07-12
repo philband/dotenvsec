@@ -205,6 +205,18 @@ dotenvsec exec -- sh -c 'test -n "$API_TOKEN"'
 Use a test that checks presence without printing secret values. Commit only the
 encrypted/configuration files after review.
 
+`exec` launches a real executable directly; shell aliases and functions are not
+available. For example, if `tf` is an alias for OpenTofu, invoke the actual
+binary:
+
+```sh
+dotenvsec exec -- tofu plan
+```
+
+The `--` separator is optional for simple commands but recommended so command
+arguments beginning with `-` are unambiguous. Use `dotenvsec shell` when an
+interactive shell with its aliases and functions is specifically required.
+
 For interactive use, prefer an isolated child shell:
 
 ```sh
