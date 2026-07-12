@@ -1,0 +1,35 @@
+name: Trigger Homebrew tap discovery
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  AQUA_CONFIG: ${{ github.workspace }}/aqua/aqua.yaml
+
+jobs:
+  dispatch:
+    name: Wake tap release discovery
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-aqua
+      - name: Create GitHub App token scoped to the tap
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.HOMEBREW_TAP_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
+          owner: philband
+          repositories: homebrew-tap
+          permission-contents: write
+          permission-metadata: read
+      - name: Send project wake-up only
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          printf '%s\n' '{"event_type":"tap-release","client_payload":{"project":"dotenvsec"}}' |
+            gh api repos/philband/homebrew-tap/dispatches --input -
