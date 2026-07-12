@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode"
 )
 
 func SettingsPath() (string, error) {
@@ -52,6 +54,9 @@ func LoadSettings() (Settings, error) {
 		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
 			return settings, errors.New("identity file must be regular, non-symlink, and private")
 		}
+	}
+	if strings.IndexFunc(settings.Editor, unicode.IsControl) >= 0 {
+		return settings, errors.New("editor command must not contain control characters")
 	}
 	return settings, nil
 }

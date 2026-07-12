@@ -27,7 +27,7 @@ func Execute() error { return newRoot().Execute() }
 func newRoot() *cobra.Command {
 	root := &cobra.Command{Use: "dotenvsec", Short: "Fail-closed SOPS environment loading", SilenceUsage: true, SilenceErrors: true}
 	root.Version = version
-	root.AddCommand(newAllow(), newStatus(), newDoctor(), newHook(), newActivate(), newExec(), newShell(), newProvider(), newAgent(), newInit(), newEdit(), newRekey())
+	root.AddCommand(newAllow(), newStatus(), newDoctor(), newHook(), newActivate(), newExec(), newShell(), newProvider(), newSettings(), newAgent(), newInit(), newEdit(), newRekey())
 	return root
 }
 
@@ -234,6 +234,71 @@ func newProvider() *cobra.Command {
 	return root
 }
 
+func newSettings() *cobra.Command {
+	root := &cobra.Command{Use: "settings", Short: "Manage local user defaults"}
+	var clear bool
+	editor := &cobra.Command{
+		Use:   "editor [command|preset]",
+		Args:  cobra.MaximumNArgs(1),
+		Short: "Set or show the global editor used by dotenvsec edit",
+		RunE: func(_ *cobra.Command, args []string) error {
+			if clear && len(args) != 0 {
+				return errors.New("editor command and --clear are mutually exclusive")
+			}
+			settings, err := config.LoadSettings()
+			if err != nil {
+				return err
+			}
+			if len(args) == 0 && !clear {
+				if settings.Editor == "" {
+					fmt.Println("inherited from SOPS_EDITOR or EDITOR")
+				} else {
+					fmt.Println(settings.Editor)
+				}
+				return nil
+			}
+			if clear {
+				settings.Editor = ""
+			} else {
+				settings.Editor, err = normalizeEditor(args[0])
+				if err != nil {
+					return err
+				}
+			}
+			if err := config.SaveSettings(settings); err != nil {
+				return err
+			}
+			if settings.Editor == "" {
+				fmt.Println("editor default cleared")
+			} else {
+				fmt.Println(settings.Editor)
+			}
+			return nil
+		},
+	}
+	editor.Flags().BoolVar(&clear, "clear", false, "clear the configured editor and inherit the environment")
+	root.AddCommand(editor)
+	return root
+}
+
+func normalizeEditor(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("editor command must not be empty")
+	}
+	for _, character := range value {
+		if character < ' ' || character == 0x7f {
+			return "", errors.New("editor command must not contain control characters")
+		}
+	}
+	switch strings.ToLower(value) {
+	case "vscode", "code":
+		return "code --wait --reuse-window", nil
+	default:
+		return value, nil
+	}
+}
+
 func newAgent() *cobra.Command {
 	root := &cobra.Command{Use: "agent", Short: "Manage the optional memory-only cache agent"}
 	root.AddCommand(
@@ -282,26 +347,35 @@ func displayRoot(path string) string {
 	return path
 }
 
-func runAttached(ctx context.Context, executable string, identityPaths []string, args ...string) error {
+func runAttached(ctx context.Context, executable string, identityPaths []string, editor string, args ...string) error {
 	command := exec.CommandContext(ctx, executable, args...)
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
-	command.Env = sopsEnvironment(os.Environ(), identityPaths)
+	command.Env = sopsEnvironment(os.Environ(), identityPaths, editor)
 	return command.Run()
 }
 
-func sopsEnvironment(base, identityPaths []string) []string {
+func sopsEnvironment(base, identityPaths []string, editor string) []string {
 	environment := stableLocaleEnvironment(base)
-	if len(identityPaths) == 0 {
+	if len(identityPaths) == 0 && editor == "" {
 		return environment
 	}
-	out := make([]string, 0, len(environment)+1)
+	out := make([]string, 0, len(environment)+2)
 	for _, item := range environment {
-		if strings.HasPrefix(item, "SOPS_AGE_KEY_FILE=") {
+		if len(identityPaths) > 0 && strings.HasPrefix(item, "SOPS_AGE_KEY_FILE=") {
+			continue
+		}
+		if editor != "" && strings.HasPrefix(item, "SOPS_EDITOR=") {
 			continue
 		}
 		out = append(out, item)
 	}
-	return append(out, "SOPS_AGE_KEY_FILE="+strings.Join(identityPaths, ","))
+	if len(identityPaths) > 0 {
+		out = append(out, "SOPS_AGE_KEY_FILE="+strings.Join(identityPaths, ","))
+	}
+	if editor != "" {
+		out = append(out, "SOPS_EDITOR="+editor)
+	}
+	return out
 }
 
 func stableLocaleEnvironment(base []string) []string {

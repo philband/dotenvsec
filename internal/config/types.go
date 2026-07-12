@@ -63,6 +63,7 @@ type Settings struct {
 	Approvals          map[string]Approval      `yaml:"approvals,omitempty"`
 	DangerousApprovals map[string][]string      `yaml:"dangerous_approvals,omitempty"`
 	IdentityPaths      []string                 `yaml:"identity_paths,omitempty"`
+	Editor             string                   `yaml:"editor,omitempty"`
 }
 
 type ProviderEntry struct {

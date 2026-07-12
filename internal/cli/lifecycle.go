@@ -198,7 +198,7 @@ func newEdit() *cobra.Command {
 		if err := verifySOPS(prepared); err != nil {
 			return err
 		}
-		return runAttached(cmd.Context(), sopsPath, prepared.Settings.IdentityPaths, prepared.Source)
+		return runAttached(cmd.Context(), sopsPath, prepared.Settings.IdentityPaths, prepared.Settings.Editor, prepared.Source)
 	}}
 }
 
@@ -223,7 +223,7 @@ func newRekey() *cobra.Command {
 		}
 		decrypt := exec.CommandContext(cmd.Context(), sopsPath, "decrypt", "--input-type", "yaml", "--output-type", "yaml", prepared.Source)
 		decrypt.Stderr = os.Stderr
-		decrypt.Env = sopsEnvironment(os.Environ(), prepared.Settings.IdentityPaths)
+		decrypt.Env = sopsEnvironment(os.Environ(), prepared.Settings.IdentityPaths, "")
 		plain, err := decrypt.Output()
 		if err != nil {
 			return errors.New("cannot decrypt existing source")
@@ -245,7 +245,7 @@ func newRekey() *cobra.Command {
 		defer func() { _ = os.Remove(tmp) }()
 		verify := exec.CommandContext(cmd.Context(), sopsPath, "decrypt", "--input-type", "yaml", "--output-type", "yaml", tmp)
 		verify.Stderr = os.Stderr
-		verify.Env = sopsEnvironment(os.Environ(), prepared.Settings.IdentityPaths)
+		verify.Env = sopsEnvironment(os.Environ(), prepared.Settings.IdentityPaths, "")
 		verified, err := verify.Output()
 		zeroBytes(verified)
 		if err != nil {
