@@ -127,7 +127,9 @@ dotenvsec i \
 
 The owner and plugin flags apply to every recipient in that invocation. IDs and
 public recipients must both be unique. Initialization encrypts to public
-recipients and should not request a YubiKey PIN or touch.
+recipients and should not request a YubiKey PIN or touch. For hardware plugins,
+initialization locates the corresponding `age-plugin-*` executable in `PATH` and
+records its directory in the repository's checksum-approved provider policy.
 
 Initialization is transactional. It creates all four files or none:
 
@@ -278,6 +280,24 @@ changed. Do not automate `allow` as part of a package upgrade.
 Check that `identity_paths` points to the correct consolidated private identity
 file, its mode is `0600`, and the required hardware plugin is installed. For
 YubiKeys, decryption may require the configured PIN and touch policy.
+
+### `age-plugin-yubikey` is not found during `exec` or `shell`
+
+Provider-based loading uses a restricted `PATH`. Run `dotenvsec doctor`; it
+checks every age plugin required by active recipients. Scopes initialized by
+older releases may contain only the SOPS directory in `provider_config.plugin_path`.
+After review, add the absolute directory containing the plugin to that path
+list, stage the scope change, and run `dotenvsec allow` again. For example on
+macOS with a Cargo-installed plugin:
+
+```yaml
+provider_config:
+  plugin_path: /Users/example/.cargo/bin:/opt/homebrew/bin
+```
+
+New initialization detects this path automatically. Repository plugin paths are
+trusted policy; do not copy an unreviewed path or point them at writable project
+directories.
 
 ### `refusing to overwrite`
 
