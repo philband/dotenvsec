@@ -88,7 +88,7 @@ func newDoctor() *cobra.Command {
 		checks := []struct {
 			name string
 			err  error
-		}{{"scope and Git boundary", nil}, {"provider checksum", provider.Verify(prepared.Provider)}, {"local approval", approvalError(prepared)}, {"SOPS", executableCheck(prepared.Config.ProviderConfig["sops_executable"])}, {"cache TTL", ttlCheck(prepared)}}
+		}{{"scope and Git boundary", nil}, {"provider checksum", provider.Verify(prepared.Provider)}, {"local approval", approvalError(prepared)}, {"SOPS", executableCheck(prepared.Config.ProviderConfig["sops_executable"])}, {"age plugins", pluginCheck(prepared)}, {"cache TTL", ttlCheck(prepared)}}
 		failed := false
 		for _, check := range checks {
 			if check.err != nil {
@@ -332,6 +332,43 @@ func executableCheck(path string) error {
 	}
 	_, err := os.Stat(path)
 	return err
+}
+
+func pluginCheck(prepared app.Prepared) error {
+	path, err := provider.SafePath(prepared.Config.ProviderConfig["plugin_path"])
+	if err != nil {
+		return err
+	}
+	required := map[string]bool{}
+	for _, recipient := range prepared.Manifest.Recipients {
+		if recipient.Status != "active" {
+			continue
+		}
+		switch recipient.Plugin {
+		case "age":
+			continue
+		case "yubikey":
+			required["age-plugin-yubikey"] = true
+		case "secure-enclave":
+			required["age-plugin-se"] = true
+		}
+	}
+	for executable := range required {
+		if !executableExistsInPath(executable, path) {
+			return fmt.Errorf("%s not found in provider plugin path", executable)
+		}
+	}
+	return nil
+}
+
+func executableExistsInPath(name, path string) bool {
+	for _, directory := range filepath.SplitList(path) {
+		info, err := os.Stat(filepath.Join(directory, name))
+		if err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
+			return true
+		}
+	}
+	return false
 }
 func ttlCheck(prepared app.Prepared) error {
 	ttl, maximum := prepared.Config.CacheTTL.Duration, prepared.Settings.MaximumCacheTTL.Duration

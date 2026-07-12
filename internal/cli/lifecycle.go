@@ -70,7 +70,11 @@ func newInit() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		scopeConfig := config.Scope{Schema: 1, Provider: "sops", Source: ".env.sops.yaml", Environment: names, ProviderConfig: map[string]string{"sops_executable": sopsPath, "sops_sha256": hash, "plugin_path": filepath.Dir(sopsPath)}}
+		pluginPath, err := initPluginPath(plugin, sopsPath)
+		if err != nil {
+			return err
+		}
+		scopeConfig := config.Scope{Schema: 1, Provider: "sops", Source: ".env.sops.yaml", Environment: names, ProviderConfig: map[string]string{"sops_executable": sopsPath, "sops_sha256": hash, "plugin_path": pluginPath}}
 		if err := config.ValidateScope(scopeConfig); err != nil {
 			return err
 		}
@@ -157,6 +161,30 @@ func validateInitPlugin(plugin string) error {
 	default:
 		return fmt.Errorf("unsupported recipient plugin %q", plugin)
 	}
+}
+
+func initPluginPath(plugin, sopsPath string) (string, error) {
+	sopsDirectory := filepath.Dir(sopsPath)
+	var executable string
+	switch plugin {
+	case "age":
+		return sopsDirectory, nil
+	case "yubikey":
+		executable = "age-plugin-yubikey"
+	case "secure-enclave":
+		executable = "age-plugin-se"
+	default:
+		return "", fmt.Errorf("unsupported recipient plugin %q", plugin)
+	}
+	pluginExecutable, err := exec.LookPath(executable)
+	if err != nil {
+		return "", fmt.Errorf("required %s executable not found in PATH", executable)
+	}
+	pluginDirectory := filepath.Dir(pluginExecutable)
+	if pluginDirectory == sopsDirectory {
+		return sopsDirectory, nil
+	}
+	return strings.Join([]string{pluginDirectory, sopsDirectory}, string(os.PathListSeparator)), nil
 }
 
 type initFile struct {

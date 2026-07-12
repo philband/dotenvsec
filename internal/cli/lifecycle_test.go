@@ -51,6 +51,13 @@ func TestInitMultipleRecipients(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repository, ".env.sops.yaml")); err != nil {
 		t.Fatal(err)
 	}
+	scopeConfig, err := config.LoadScope(filepath.Join(repository, ".dotenv-sec.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(scopeConfig.ProviderConfig["plugin_path"], filepath.Dir(sops)) {
+		t.Fatalf("plugin path does not include detected plugin directory: %q", scopeConfig.ProviderConfig["plugin_path"])
+	}
 
 	args, err := os.ReadFile(arguments)
 	if err != nil {
@@ -191,6 +198,11 @@ func fakeSOPS(t *testing.T, fail bool) (string, string) {
 	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
+	plugin := filepath.Join(directory, "age-plugin-yubikey")
+	if err := os.WriteFile(plugin, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("SOPS_TEST_ARGUMENTS", arguments)
 	return executable, arguments
 }
