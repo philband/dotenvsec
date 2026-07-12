@@ -41,14 +41,15 @@ For YubiKey and Apple Secure Enclave requirements, read
 Register `dotenvsec-provider-sops`, not the `sops` executable:
 
 ```sh
-PROVIDER="$(command -v dotenvsec-provider-sops)"
+PROVIDER="$(realpath "$(command -v dotenvsec-provider-sops)")"
 PROVIDER_SHA256="$(shasum -a 256 "$PROVIDER" | awk '{print $1}')"
 dotenvsec provider register sops "$PROVIDER" --sha256 "$PROVIDER_SHA256"
 dotenvsec provider list
 ```
 
 Provider registration is per user and writes the checksum-pinned executable to
-dotenvsec's local settings.
+dotenvsec's local settings. Resolving the path is required for Homebrew because
+the registry rejects symlinks such as `/opt/homebrew/bin/dotenvsec-provider-sops`.
 
 ## 3. Configure decryption identities
 
@@ -75,6 +76,25 @@ providers:
 ```
 
 Never commit local settings or private identities.
+
+For YubiKey identities, connect only a locally authorized key and export its
+plugin identity reference into the consolidated file. This output is private
+local configuration even though the hardware still protects the key:
+
+```sh
+IDENTITY_DIR="$HOME/Library/Application Support/dotenvsec"
+IDENTITY_FILE="$IDENTITY_DIR/yubikey-identities.txt"
+mkdir -p "$IDENTITY_DIR"
+umask 077
+LANG=C LC_ALL=C age-plugin-yubikey -i > "$IDENTITY_FILE"
+chmod 0600 "$IDENTITY_FILE"
+```
+
+If this user controls more than one authorized YubiKey, connect each additional
+key separately and append its `-i` output. A user does not need private identity
+references for every public recipient in the repository—only for devices that
+user is authorized to operate. Set `identity_paths` to the absolute value of
+`IDENTITY_FILE`.
 
 ## 4. Initialize a repository scope
 

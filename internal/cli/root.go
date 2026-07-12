@@ -282,11 +282,26 @@ func displayRoot(path string) string {
 	return path
 }
 
-func runAttached(ctx context.Context, executable string, args ...string) error {
+func runAttached(ctx context.Context, executable string, identityPaths []string, args ...string) error {
 	command := exec.CommandContext(ctx, executable, args...)
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
-	command.Env = stableLocaleEnvironment(os.Environ())
+	command.Env = sopsEnvironment(os.Environ(), identityPaths)
 	return command.Run()
+}
+
+func sopsEnvironment(base, identityPaths []string) []string {
+	environment := stableLocaleEnvironment(base)
+	if len(identityPaths) == 0 {
+		return environment
+	}
+	out := make([]string, 0, len(environment)+1)
+	for _, item := range environment {
+		if strings.HasPrefix(item, "SOPS_AGE_KEY_FILE=") {
+			continue
+		}
+		out = append(out, item)
+	}
+	return append(out, "SOPS_AGE_KEY_FILE="+strings.Join(identityPaths, ","))
 }
 
 func stableLocaleEnvironment(base []string) []string {
