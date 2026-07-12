@@ -70,6 +70,7 @@ type ProviderEntry struct {
 	Executable string   `yaml:"executable"`
 	SHA256     string   `yaml:"sha256"`
 	Timeout    Duration `yaml:"timeout,omitempty"`
+	Source     string   `yaml:"source,omitempty"`
 }
 
 type Approval struct {

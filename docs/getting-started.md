@@ -36,20 +36,21 @@ Install the age implementation or hardware plugin that owns your identities.
 For YubiKey and Apple Secure Enclave requirements, read
 [Hardware enrollment](enrollment.md).
 
-## 2. Register the local provider
+## 2. Verify the bundled provider
 
-Register `dotenvsec-provider-sops`, not the `sops` executable:
+Official archives and the Homebrew formula install `dotenvsec-provider-sops`
+beside the main `dotenvsec` binary. On every CLI invocation, dotenvsec locates
+that canonical sibling, verifies its ownership and permissions, calculates its
+SHA-256, and creates or refreshes the local `sops` provider entry automatically:
 
 ```sh
-PROVIDER="$(command -v dotenvsec-provider-sops)"
-PROVIDER_SHA256="$(shasum -a 256 "$PROVIDER" | awk '{print $1}')"
-dotenvsec provider register sops "$PROVIDER" --sha256 "$PROVIDER_SHA256"
 dotenvsec provider list
 ```
 
-Provider registration is per user and writes the checksum-pinned executable to
-dotenvsec's local settings. Registration resolves package-manager symlinks and
-stores only the canonical regular executable.
+The entry should report `ok` and `source: bundled` in local settings. Automatic
+refresh applies only to the official sibling named `dotenvsec-provider-sops`.
+External/custom providers remain explicit and require `provider register` with
+an absolute path and reviewed checksum.
 
 ## 3. Configure decryption identities
 
@@ -62,8 +63,8 @@ Local settings are stored at:
 - macOS: `~/Library/Application Support/dotenvsec/settings.yaml`
 - Linux: `${XDG_CONFIG_HOME:-$HOME/.config}/dotenvsec/settings.yaml`
 
-After provider registration has created the file, add the identity path without
-removing the generated `providers` section:
+After the first dotenvsec command has created the file, add the identity path
+without removing the generated `providers` section:
 
 ```yaml
 schema: 1
@@ -247,9 +248,11 @@ retry. Current initialization supplies the filename and rolls back on failure.
 
 ### `provider "sops" is not registered locally`
 
-Register the absolute `dotenvsec-provider-sops` path with
-`dotenvsec provider register sops ...`. Do not register the `sops` binary as the
-provider.
+The official provider sibling is missing or dotenvsec is running from a custom
+layout. Reinstall the official archive/formula and ensure `dotenvsec` and
+`dotenvsec-provider-sops` share one canonical directory. Explicit registration
+is reserved for external providers; do not register the `sops` binary itself as
+a provider.
 
 ### `required file is not tracked by Git`
 
@@ -267,16 +270,14 @@ The repository pins the SOPS executable used during initialization. Review the
 package upgrade, update the pinned path/checksum through a trusted process, and
 approve the changed policy again. Never bypass the mismatch.
 
-### Provider invalid after `brew upgrade`
+### Scope unapproved after `brew upgrade`
 
 Homebrew removes the old versioned Cellar directory after upgrading dotenvsec.
-Re-register the newly installed provider, review the changed provider checksum,
-and approve each affected repository again:
+The next dotenvsec invocation automatically discovers and checksum-pins the new
+bundled provider. Since the trusted provider checksum changed, each repository's
+approval becomes invalid until it is reviewed again:
 
 ```sh
-PROVIDER="$(command -v dotenvsec-provider-sops)"
-PROVIDER_SHA256="$(shasum -a 256 "$PROVIDER" | awk '{print $1}')"
-dotenvsec provider register sops "$PROVIDER" --sha256 "$PROVIDER_SHA256"
 dotenvsec provider list
 
 cd /path/to/repository
@@ -285,7 +286,8 @@ dotenvsec allow
 ```
 
 Re-approval is intentional: the locally trusted executable and its checksum
-changed. Do not automate `allow` as part of a package upgrade.
+changed. Provider refresh is automatic; do not automate `allow` as part of a
+package upgrade.
 
 ### Decryption cannot find an identity
 

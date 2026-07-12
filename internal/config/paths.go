@@ -34,6 +34,11 @@ func LoadSettings() (Settings, error) {
 	if settings.Providers == nil {
 		settings.Providers = map[string]ProviderEntry{}
 	}
+	for id, entry := range settings.Providers {
+		if entry.Source != "" && entry.Source != "manual" && entry.Source != "bundled" {
+			return settings, errors.New("provider " + id + " has unsupported source")
+		}
+	}
 	if settings.Approvals == nil {
 		settings.Approvals = map[string]Approval{}
 	}
