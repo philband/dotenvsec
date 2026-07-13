@@ -2,16 +2,20 @@ package cli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/philband/dotenvsec/internal/app"
 	"github.com/philband/dotenvsec/internal/config"
 	"github.com/philband/dotenvsec/internal/recipients"
+	"github.com/philband/dotenvsec/internal/scope"
 )
 
 func TestInitMultipleRecipients(t *testing.T) {
 	repository := t.TempDir()
+	initTestGit(t, repository)
 	sops, arguments := fakeSOPS(t, false)
 	command := newInit()
 	command.SetArgs([]string{
@@ -76,6 +80,7 @@ func TestInitMultipleRecipients(t *testing.T) {
 
 func TestInitEncryptionFailureLeavesNoScope(t *testing.T) {
 	repository := t.TempDir()
+	initTestGit(t, repository)
 	sops, _ := fakeSOPS(t, true)
 	command := newInit()
 	command.SetArgs([]string{repository, "-n", "TOKEN", "-r", "primary=age1test", "-s", sops})
@@ -95,6 +100,7 @@ func TestInitRejectsDuplicateRecipientInputsBeforeWriting(t *testing.T) {
 	for name, flags := range tests {
 		t.Run(name, func(t *testing.T) {
 			repository := t.TempDir()
+			initTestGit(t, repository)
 			sops, _ := fakeSOPS(t, false)
 			args := append([]string{repository, "-n", "TOKEN", "-s", sops}, flags...)
 			command := newInit()
@@ -105,6 +111,97 @@ func TestInitRejectsDuplicateRecipientInputsBeforeWriting(t *testing.T) {
 			assertNoInitFiles(t, repository)
 		})
 	}
+}
+
+func TestInitLocalOutsideGit(t *testing.T) {
+	directory := t.TempDir()
+	sops, _ := fakeSOPS(t, false)
+	command := newInit()
+	command.SetArgs([]string{directory, "--local", "-n", "TOKEN", "-r", "primary=age1test", "-s", sops})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	scopeConfig, err := config.LoadScope(filepath.Join(directory, ".dotenv-sec.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scopeConfig.EffectiveMode() != config.ScopeModeLocal {
+		t.Fatalf("mode = %q", scopeConfig.EffectiveMode())
+	}
+	for _, path := range []string{".dotenv-sec.yaml", ".dotenv-sec/recipients.yaml", ".sops.yaml", ".env.sops.yaml"} {
+		info, err := os.Stat(filepath.Join(directory, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("%s mode = %o", path, info.Mode().Perm())
+		}
+	}
+}
+
+func TestInitLocalInsideGitAddsPrivateExcludes(t *testing.T) {
+	repository := t.TempDir()
+	initTestGit(t, repository)
+	nested := filepath.Join(repository, "infra", "prod")
+	if err := os.MkdirAll(nested, 0755); err != nil {
+		t.Fatal(err)
+	}
+	sops, _ := fakeSOPS(t, false)
+	command := newInit()
+	command.SetArgs([]string{nested, "--local", "-n", "TOKEN", "-r", "primary=age1test", "-s", sops})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"infra/prod/.dotenv-sec.yaml", "infra/prod/.dotenv-sec/recipients.yaml", "infra/prod/.sops.yaml", "infra/prod/.env.sops.yaml"} {
+		git := exec.Command("git", "-C", repository, "check-ignore", "--quiet", "--", path)
+		if output, err := git.CombinedOutput(); err != nil {
+			t.Fatalf("%s is not ignored: %v: %s", path, err, output)
+		}
+	}
+}
+
+func TestInitGitLocalInheritedReadOnly(t *testing.T) {
+	repository := t.TempDir()
+	initTestGit(t, repository)
+	writeTestFile(t, filepath.Join(repository, "README.md"), "test\n")
+	runTestGit(t, repository, "add", "README.md")
+	runTestGit(t, repository, "commit", "-m", "initial")
+	sops, _ := fakeSOPS(t, false)
+	command := newInit()
+	command.SetArgs([]string{repository, "--git-local", "-n", "TOKEN", "-r", "primary=age1test", "-s", sops})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(t.TempDir(), "feature")
+	runTestGit(t, repository, "worktree", "add", "-b", "test-feature", linked)
+	id, err := scope.Resolve(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.Mode != config.ScopeModeGitLocal || !id.ReadOnly || id.Directory != canonicalTestPath(t, repository) {
+		t.Fatalf("unexpected inherited identity: %#v", id)
+	}
+	prepared := app.Prepared{Identity: id}
+	if err := app.EnsureWritable(prepared); err == nil || !strings.Contains(err.Error(), "inherited read-only") {
+		t.Fatalf("expected read-only rejection, got %v", err)
+	}
+}
+
+func TestInitGitLocalRejectedInLinkedWorktree(t *testing.T) {
+	repository := t.TempDir()
+	initTestGit(t, repository)
+	writeTestFile(t, filepath.Join(repository, "README.md"), "test\n")
+	runTestGit(t, repository, "add", "README.md")
+	runTestGit(t, repository, "commit", "-m", "initial")
+	linked := filepath.Join(t.TempDir(), "feature")
+	runTestGit(t, repository, "worktree", "add", "-b", "test-linked-init", linked)
+	sops, _ := fakeSOPS(t, false)
+	command := newInit()
+	command.SetArgs([]string{linked, "--git-local", "-n", "TOKEN", "-r", "primary=age1test", "-s", sops})
+	if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "main worktree") {
+		t.Fatalf("expected main-worktree rejection, got %v", err)
+	}
+	assertNoInitFiles(t, linked)
 }
 
 func TestStableLocaleEnvironment(t *testing.T) {
@@ -214,4 +311,36 @@ func assertNoInitFiles(t *testing.T, repository string) {
 			t.Fatalf("partial init path remains: %s", path)
 		}
 	}
+}
+
+func initTestGit(t *testing.T, directory string) {
+	t.Helper()
+	runTestGit(t, directory, "init")
+	runTestGit(t, directory, "config", "user.name", "dotenvsec test")
+	runTestGit(t, directory, "config", "user.email", "dotenvsec@example.invalid")
+	runTestGit(t, directory, "config", "commit.gpgsign", "false")
+}
+
+func runTestGit(t *testing.T, directory string, arguments ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", arguments, err, output)
+	}
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func canonicalTestPath(t *testing.T, path string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }

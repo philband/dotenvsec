@@ -17,6 +17,7 @@ import (
 	"github.com/philband/dotenvsec/internal/config"
 	"github.com/philband/dotenvsec/internal/environment"
 	"github.com/philband/dotenvsec/internal/provider"
+	"github.com/philband/dotenvsec/internal/scope"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +32,41 @@ func newRoot() *cobra.Command {
 		_, err := app.RefreshBundledProvider()
 		return err
 	}
-	root.AddCommand(newAllow(), newStatus(), newDoctor(), newHook(), newActivate(), newExec(), newShell(), newProvider(), newSettings(), newAgent(), newInit(), newEdit(), newRekey())
+	root.AddCommand(newAllow(), newStatus(), newDoctor(), newHook(), newActivate(), newExec(), newShell(), newProvider(), newSettings(), newAgent(), newScope(), newInit(), newEdit(), newRekey())
+	return root
+}
+
+func newScope() *cobra.Command {
+	root := &cobra.Command{Use: "scope", Short: "Manage local scope metadata"}
+	gitLocal := &cobra.Command{Use: "git-local", Short: "Manage the shared Git-local scope registry"}
+	gitLocal.AddCommand(
+		&cobra.Command{Use: "register [path]", Args: cobra.MaximumNArgs(1), Short: "Register an existing Git-local scope from the main worktree", RunE: func(_ *cobra.Command, args []string) error {
+			path := pathArg(args)
+			if err := scope.EnsureLocalIgnored(path); err != nil {
+				return err
+			}
+			if err := scope.RegisterGitLocal(path); err != nil {
+				return err
+			}
+			fmt.Println("git-local scope registered")
+			return nil
+		}},
+		&cobra.Command{Use: "unregister [path]", Args: cobra.MaximumNArgs(1), Short: "Remove discovery metadata without deleting scope files", RunE: func(_ *cobra.Command, args []string) error {
+			if err := scope.UnregisterGitLocal(pathArg(args)); err != nil {
+				return err
+			}
+			fmt.Println("git-local scope unregistered; files were not deleted")
+			return nil
+		}},
+		&cobra.Command{Use: "repair-owner [path]", Args: cobra.MaximumNArgs(1), Short: "Rebind a moved registry to the current main worktree", RunE: func(_ *cobra.Command, args []string) error {
+			if err := scope.RepairGitLocalOwner(pathArg(args)); err != nil {
+				return err
+			}
+			fmt.Println("git-local registry owner repaired")
+			return nil
+		}},
+	)
+	root.AddCommand(gitLocal)
 	return root
 }
 
@@ -68,7 +103,10 @@ func newStatus() *cobra.Command {
 			fmt.Println("scope: none")
 			return nil
 		}
-		fmt.Printf("scope: %s\napproved: %t\nprovider: %s\nsource: %s\ncache ttl: %s\nvariable count: %d\n", displayRoot(status.Scope), status.Approved, status.Provider, status.Source, status.CacheTTL, status.Variables)
+		fmt.Printf("scope: %s\nmode: %s\nownership: %s\napproved: %t\nprovider: %s\nsource: %s\ncache ttl: %s\nvariable count: %d\n", displayRoot(status.Scope), status.Mode, status.Ownership, status.Approved, status.Provider, status.Source, status.CacheTTL, status.Variables)
+		if status.Owner != "" {
+			fmt.Printf("owner: %s\n", status.Owner)
+		}
 		if showNames {
 			prepared, err := app.Prepare(pathArg(args), false)
 			if err != nil {
@@ -92,7 +130,7 @@ func newDoctor() *cobra.Command {
 		checks := []struct {
 			name string
 			err  error
-		}{{"scope and Git boundary", nil}, {"provider checksum", provider.Verify(prepared.Provider)}, {"local approval", approvalError(prepared)}, {"SOPS", executableCheck(prepared.Config.ProviderConfig["sops_executable"])}, {"age plugins", pluginCheck(prepared)}, {"cache TTL", ttlCheck(prepared)}}
+		}{{"scope boundary and mode", nil}, {"provider checksum", provider.Verify(prepared.Provider)}, {"local approval", approvalError(prepared)}, {"SOPS", executableCheck(prepared.Config.ProviderConfig["sops_executable"])}, {"age plugins", pluginCheck(prepared)}, {"cache TTL", ttlCheck(prepared)}}
 		failed := false
 		for _, check := range checks {
 			if check.err != nil {

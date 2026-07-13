@@ -11,6 +11,9 @@ func Approve(path string, dangerous []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := EnsureWritable(prepared); err != nil {
+		return "", err
+	}
 	prepared.Settings.Approvals[prepared.ScopeKey] = config.Approval{Hash: prepared.TrustHash, ApprovedAt: time.Now().UTC().Format(time.RFC3339)}
 	if dangerous != nil {
 		prepared.Settings.DangerousApprovals[prepared.ScopeKey] = append([]string(nil), dangerous...)

@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/philband/dotenvsec/internal/config"
 )
 
 const ConfigName = ".dotenv-sec.yaml"
@@ -17,10 +19,13 @@ const ConfigName = ".dotenv-sec.yaml"
 type Identity struct {
 	RepositoryID string
 	RelativePath string
+	Mode         string
 	WorktreeRoot string
+	StorageRoot  string
 	CommonGitDir string
 	Directory    string
 	ConfigPath   string
+	ReadOnly     bool
 }
 
 func Resolve(start string) (Identity, error) {
@@ -28,53 +33,28 @@ func Resolve(start string) (Identity, error) {
 	if err != nil {
 		return Identity{}, err
 	}
-	root, err := git(physical, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return Identity{}, errors.New("not inside a Git worktree")
+	gitContext, gitErr := InspectGit(physical)
+	if gitErr != nil {
+		return resolveFilesystemLocal(physical)
 	}
-	common, err := git(physical, "rev-parse", "--git-common-dir")
-	if err != nil {
-		return Identity{}, fmt.Errorf("resolve Git common directory: %w", err)
-	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		return Identity{}, err
-	}
-	root = filepath.Clean(root)
-	if !contained(root, physical) {
+	if !contained(gitContext.WorktreeRoot, physical) {
 		return Identity{}, errors.New("start path is outside active worktree")
 	}
-	if !filepath.IsAbs(common) {
-		common = filepath.Join(physical, common)
+	filesystemDirectory, filesystemConfig, filesystemErr := nearestConfig(physical, gitContext.WorktreeRoot)
+	if filesystemErr != nil && !errors.Is(filesystemErr, os.ErrNotExist) {
+		return Identity{}, filesystemErr
 	}
-	common, err = filepath.Abs(common)
-	if err != nil {
-		return Identity{}, err
+	inherited, inheritedErr := resolveInherited(physical, gitContext)
+	if inheritedErr != nil && !errors.Is(inheritedErr, os.ErrNotExist) {
+		return Identity{}, inheritedErr
 	}
-	common, err = filepath.EvalSymlinks(common)
-	if err != nil {
-		return Identity{}, err
+	if filesystemErr == nil && (inheritedErr != nil || scopeDepth(gitContext.WorktreeRoot, filesystemDirectory) >= scopeDepth(gitContext.WorktreeRoot, inherited.virtualDirectory)) {
+		return identityForFilesystemScope(filesystemDirectory, filesystemConfig, gitContext)
 	}
-	repoID := repositoryID(common)
-	for dir := physical; contained(root, dir); dir = filepath.Dir(dir) {
-		candidate := filepath.Join(dir, ConfigName)
-		if info, statErr := os.Lstat(candidate); statErr == nil {
-			if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-				return Identity{}, errors.New("scope config must be a regular non-symlink file")
-			}
-			rel, _ := filepath.Rel(root, dir)
-			if rel == "." {
-				rel = ""
-			}
-			return Identity{repoID, filepath.ToSlash(rel), root, common, dir, candidate}, nil
-		} else if !os.IsNotExist(statErr) {
-			return Identity{}, statErr
-		}
-		if dir == root {
-			break
-		}
+	if inheritedErr == nil {
+		return inherited.identity, nil
 	}
-	return Identity{RepositoryID: repoID, WorktreeRoot: root, CommonGitDir: common}, os.ErrNotExist
+	return Identity{RepositoryID: repositoryID(gitContext.CommonGitDir), Mode: config.ScopeModeRepository, WorktreeRoot: gitContext.WorktreeRoot, StorageRoot: gitContext.WorktreeRoot, CommonGitDir: gitContext.CommonGitDir}, os.ErrNotExist
 }
 
 func ResolveSource(id Identity, relative string) (string, error) {
@@ -82,15 +62,19 @@ func ResolveSource(id Identity, relative string) (string, error) {
 		return "", errors.New("source must be a non-empty relative path")
 	}
 	joined := filepath.Join(id.Directory, filepath.Clean(relative))
+	joinedInfo, err := os.Lstat(joined)
+	if err != nil {
+		return "", err
+	}
+	if !joinedInfo.Mode().IsRegular() || joinedInfo.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("source must be a regular non-symlink file")
+	}
 	parent, err := filepath.EvalSymlinks(filepath.Dir(joined))
 	if err != nil {
 		return "", err
 	}
 	resolved := filepath.Join(parent, filepath.Base(joined))
-	if target, evalErr := filepath.EvalSymlinks(joined); evalErr == nil {
-		resolved = target
-	}
-	if !contained(id.WorktreeRoot, resolved) || !contained(id.Directory, resolved) {
+	if !contained(id.StorageRoot, resolved) || !contained(id.Directory, resolved) {
 		return "", errors.New("source escapes selected scope/worktree")
 	}
 	info, err := os.Lstat(resolved)
@@ -104,6 +88,84 @@ func ResolveSource(id Identity, relative string) (string, error) {
 		return "", errors.New("source exceeds size limit")
 	}
 	return resolved, nil
+}
+
+func resolveFilesystemLocal(physical string) (Identity, error) {
+	directory, configPath, err := nearestConfig(physical, volumeRoot(physical))
+	if err != nil {
+		return Identity{}, err
+	}
+	cfg, err := config.LoadScope(configPath)
+	if err != nil {
+		return Identity{}, fmt.Errorf("scope config: %w", err)
+	}
+	if cfg.EffectiveMode() != config.ScopeModeLocal {
+		return Identity{}, errors.New("repository and git-local scopes require a Git worktree")
+	}
+	return Identity{RepositoryID: localRepositoryID(directory), Mode: config.ScopeModeLocal, WorktreeRoot: directory, StorageRoot: directory, Directory: directory, ConfigPath: configPath}, nil
+}
+
+func identityForFilesystemScope(directory, configPath string, gitContext GitContext) (Identity, error) {
+	cfg, err := config.LoadScope(configPath)
+	if err != nil {
+		return Identity{}, fmt.Errorf("scope config: %w", err)
+	}
+	relative, err := filepath.Rel(gitContext.WorktreeRoot, directory)
+	if err != nil {
+		return Identity{}, err
+	}
+	if relative == "." {
+		relative = ""
+	}
+	mode := cfg.EffectiveMode()
+	repository := repositoryID(gitContext.CommonGitDir)
+	if mode == config.ScopeModeLocal {
+		repository = localRepositoryID(directory)
+	}
+	if mode == config.ScopeModeGitLocal {
+		if gitContext.LinkedWorktree {
+			return Identity{}, errors.New("git-local scope files may only be stored in the main worktree")
+		}
+		registered, err := GitLocalScopeRegistered(gitContext.CommonGitDir, filepath.ToSlash(relative), gitContext.WorktreeRoot)
+		if err != nil {
+			return Identity{}, err
+		}
+		if !registered {
+			return Identity{}, errors.New("git-local scope is missing from the shared registry")
+		}
+	}
+	return Identity{RepositoryID: repository, RelativePath: filepath.ToSlash(relative), Mode: mode, WorktreeRoot: gitContext.WorktreeRoot, StorageRoot: gitContext.WorktreeRoot, CommonGitDir: gitContext.CommonGitDir, Directory: directory, ConfigPath: configPath}, nil
+}
+
+func nearestConfig(start, boundary string) (string, string, error) {
+	for directory := start; contained(boundary, directory); directory = filepath.Dir(directory) {
+		candidate := filepath.Join(directory, ConfigName)
+		if info, err := os.Lstat(candidate); err == nil {
+			if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+				return "", "", errors.New("scope config must be a regular non-symlink file")
+			}
+			return directory, candidate, nil
+		} else if !os.IsNotExist(err) {
+			return "", "", err
+		}
+		if directory == boundary {
+			break
+		}
+	}
+	return "", "", os.ErrNotExist
+}
+
+func volumeRoot(path string) string {
+	volume := filepath.VolumeName(path)
+	return volume + string(filepath.Separator)
+}
+
+func scopeDepth(root, directory string) int {
+	relative, err := filepath.Rel(root, directory)
+	if err != nil || relative == "." {
+		return 0
+	}
+	return len(strings.Split(filepath.Clean(relative), string(filepath.Separator)))
 }
 
 func canonicalDirectory(path string) (string, error) {
@@ -132,7 +194,13 @@ func git(dir string, args ...string) (string, error) {
 }
 
 func repositoryID(common string) string {
+	// Preserve the v0.1 repository identity so existing approvals remain valid.
 	sum := sha256.Sum256([]byte(filepath.Clean(common)))
+	return hex.EncodeToString(sum[:])
+}
+
+func localRepositoryID(directory string) string {
+	sum := sha256.Sum256([]byte("local\x00" + filepath.Clean(directory)))
 	return hex.EncodeToString(sum[:])
 }
 

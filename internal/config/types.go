@@ -14,6 +14,9 @@ const (
 	MaxYAMLBytes            = 1 << 20
 	MaxEnvironmentBytes     = 512 << 10
 	MaxEnvironmentVariables = 4096
+	ScopeModeRepository     = "repository"
+	ScopeModeLocal          = "local"
+	ScopeModeGitLocal       = "git-local"
 )
 
 type Duration struct{ time.Duration }
@@ -32,6 +35,7 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 
 type Scope struct {
 	Schema         int               `yaml:"schema"`
+	Mode           string            `yaml:"mode,omitempty"`
 	Provider       string            `yaml:"provider"`
 	Source         string            `yaml:"source"`
 	Environment    []string          `yaml:"environment"`
@@ -39,6 +43,13 @@ type Scope struct {
 	AllowDangerous []string          `yaml:"allow_dangerous,omitempty"`
 	CacheTTL       Duration          `yaml:"cache_ttl,omitempty"`
 	ProviderConfig map[string]string `yaml:"provider_config,omitempty"`
+}
+
+func (s Scope) EffectiveMode() string {
+	if s.Mode == "" {
+		return ScopeModeRepository
+	}
+	return s.Mode
 }
 
 type RecipientManifest struct {

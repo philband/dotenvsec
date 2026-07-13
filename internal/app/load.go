@@ -66,11 +66,27 @@ func Prepare(path string, requireApproval bool) (Prepared, error) {
 	}
 	sopsPath := filepath.Join(id.Directory, ".sops.yaml")
 	for _, tracked := range []string{id.ConfigPath, source, manifestPath, sopsPath} {
-		if err := requireTracked(id.WorktreeRoot, tracked); err != nil {
-			return Prepared{}, err
+		switch id.Mode {
+		case config.ScopeModeRepository:
+			if err := requireTracked(id.WorktreeRoot, tracked); err != nil {
+				return Prepared{}, err
+			}
+		case config.ScopeModeLocal, config.ScopeModeGitLocal:
+			if id.CommonGitDir != "" {
+				if err := requireIgnoredUntracked(id.StorageRoot, tracked); err != nil {
+					return Prepared{}, err
+				}
+			}
 		}
 		if err := requireSafeFile(tracked); err != nil {
 			return Prepared{}, err
+		}
+		if id.Mode != config.ScopeModeRepository {
+			if info, err := os.Stat(tracked); err != nil {
+				return Prepared{}, err
+			} else if info.Mode().Perm()&0077 != 0 {
+				return Prepared{}, fmt.Errorf("local scope file is not private: %s", tracked)
+			}
 		}
 	}
 	sopsRules, err := os.ReadFile(sopsPath)
@@ -95,7 +111,7 @@ func Prepare(path string, requireApproval bool) (Prepared, error) {
 	if err != nil {
 		return Prepared{}, err
 	}
-	key := id.RepositoryID + ":" + id.RelativePath
+	key := scopeKey(id)
 	if requireApproval {
 		approval, ok := settings.Approvals[key]
 		if !ok || approval.Hash != hash {
@@ -110,8 +126,22 @@ func Prepare(path string, requireApproval bool) (Prepared, error) {
 		return Prepared{}, err
 	}
 	identityHash := sha256.Sum256([]byte(strings.Join(settings.IdentityPaths, "\x00")))
-	cacheKey := hash + ":" + sourceHash + ":" + entry.SHA256 + ":" + hex.EncodeToString(identityHash[:])
+	cacheKey := id.Mode + ":" + hash + ":" + sourceHash + ":" + entry.SHA256 + ":" + hex.EncodeToString(identityHash[:])
 	return Prepared{Identity: id, Config: cfg, Manifest: manifest, Settings: settings, Provider: entry, Source: source, TrustHash: hash, ScopeKey: key, CacheKey: cacheKey, CacheTTL: effectiveTTL(cfg.CacheTTL.Duration, settings.MaximumCacheTTL.Duration)}, nil
+}
+
+func EnsureWritable(prepared Prepared) error {
+	if prepared.Identity.ReadOnly {
+		return fmt.Errorf("scope is inherited read-only from the main worktree at %s; run the modifying command there", prepared.Identity.Directory)
+	}
+	return nil
+}
+
+func scopeKey(id scope.Identity) string {
+	if id.Mode == config.ScopeModeRepository {
+		return id.RepositoryID + ":" + id.RelativePath
+	}
+	return id.Mode + ":" + id.RepositoryID + ":" + id.RelativePath
 }
 
 func Load(ctx context.Context, path string) (Loaded, error) {
@@ -200,6 +230,25 @@ func requireTracked(root, path string) error {
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("required file is not tracked by Git: %s", rel)
+	}
+	return nil
+}
+
+func requireIgnoredUntracked(root, path string) error {
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("local scope file is outside its storage worktree: %s", path)
+	}
+	relative = filepath.ToSlash(relative)
+	tracked := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", relative)
+	tracked.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
+	if tracked.Run() == nil {
+		return fmt.Errorf("local scope file must not be tracked by Git: %s", relative)
+	}
+	ignored := exec.Command("git", "-C", root, "check-ignore", "--no-index", "--quiet", "--", relative)
+	ignored.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
+	if err := ignored.Run(); err != nil {
+		return fmt.Errorf("local scope file must be ignored by Git: %s", relative)
 	}
 	return nil
 }
