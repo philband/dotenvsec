@@ -13,6 +13,7 @@ import (
 
 type policy struct {
 	Version        int                      `json:"version"`
+	Mode           string                   `json:"mode,omitempty"`
 	RepositoryID   string                   `json:"repository_id"`
 	RelativeScope  string                   `json:"relative_scope"`
 	Provider       string                   `json:"provider"`
@@ -27,9 +28,23 @@ type policy struct {
 }
 
 func Hash(id scope.Identity, cfg config.Scope, manifest config.RecipientManifest, providerSHA256 string) (string, error) {
-	p := policy{cfg.Schema, id.RepositoryID, id.RelativePath, cfg.Provider, cfg.Source,
-		append([]string(nil), cfg.Environment...), append([]string(nil), cfg.Unset...),
-		append([]string(nil), cfg.AllowDangerous...), cfg.CacheTTL.String(), cfg.ProviderConfig, manifest, providerSHA256}
+	// Hash the serialized mode, not EffectiveMode. Legacy repository scopes omit
+	// mode, and omitempty preserves their pre-mode approval hash exactly.
+	p := policy{
+		Version:        cfg.Schema,
+		Mode:           cfg.Mode,
+		RepositoryID:   id.RepositoryID,
+		RelativeScope:  id.RelativePath,
+		Provider:       cfg.Provider,
+		Source:         cfg.Source,
+		Environment:    append([]string(nil), cfg.Environment...),
+		Unset:          append([]string(nil), cfg.Unset...),
+		AllowDangerous: append([]string(nil), cfg.AllowDangerous...),
+		CacheTTL:       cfg.CacheTTL.String(),
+		ProviderConfig: cfg.ProviderConfig,
+		Manifest:       manifest,
+		ProviderSHA256: providerSHA256,
+	}
 	sort.Strings(p.Environment)
 	sort.Strings(p.Unset)
 	sort.Strings(p.AllowDangerous)

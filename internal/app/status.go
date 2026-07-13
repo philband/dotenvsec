@@ -10,6 +10,9 @@ type Status struct {
 	Configured bool
 	Approved   bool
 	Scope      string
+	Mode       string
+	Ownership  string
+	Owner      string
 	Provider   string
 	CacheTTL   string
 	Variables  int
@@ -25,5 +28,10 @@ func Inspect(path string) (Status, error) {
 		return Status{}, err
 	}
 	approval, ok := prepared.Settings.Approvals[prepared.ScopeKey]
-	return Status{true, ok && approval.Hash == prepared.TrustHash, filepath.ToSlash(prepared.Identity.RelativePath), prepared.Config.Provider, prepared.Config.CacheTTL.String(), len(prepared.Config.Environment), fmt.Sprintf("%s (encrypted)", prepared.Config.Source)}, nil
+	ownership, owner := "writable", ""
+	if prepared.Identity.ReadOnly {
+		ownership = "inherited, read-only"
+		owner = prepared.Identity.Directory
+	}
+	return Status{Configured: true, Approved: ok && approval.Hash == prepared.TrustHash, Scope: filepath.ToSlash(prepared.Identity.RelativePath), Mode: prepared.Identity.Mode, Ownership: ownership, Owner: owner, Provider: prepared.Config.Provider, CacheTTL: prepared.Config.CacheTTL.String(), Variables: len(prepared.Config.Environment), Source: fmt.Sprintf("%s (encrypted)", prepared.Config.Source)}, nil
 }

@@ -48,6 +48,19 @@ func TestLoadScopeStrictAndExactNames(t *testing.T) {
 	}
 }
 
+func TestValidateScopeModes(t *testing.T) {
+	for _, mode := range []string{"", ScopeModeRepository, ScopeModeLocal, ScopeModeGitLocal} {
+		scope := Scope{Schema: ScopeSchemaVersion, Mode: mode, Provider: "sops", Source: ".env.sops.yaml", Environment: []string{"TOKEN"}}
+		if err := ValidateScope(scope); err != nil {
+			t.Fatalf("mode %q rejected: %v", mode, err)
+		}
+	}
+	scope := Scope{Schema: ScopeSchemaVersion, Mode: "remote", Provider: "sops", Source: ".env.sops.yaml"}
+	if err := ValidateScope(scope); err == nil || !strings.Contains(err.Error(), "unsupported scope mode") {
+		t.Fatalf("invalid mode error = %v", err)
+	}
+}
+
 func FuzzParseEnvironment(f *testing.F) {
 	f.Add([]byte("environment:\n  A: value\n"))
 	f.Add([]byte("environment: {}\n"))

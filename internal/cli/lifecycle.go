@@ -23,14 +23,43 @@ func newInit() *cobra.Command {
 	var names []string
 	var recipientSpecs []string
 	var owner, plugin, sopsPath string
+	var local, gitLocal bool
 	cmd := &cobra.Command{Use: "init [path]", Aliases: []string{"i"}, Args: cobra.MaximumNArgs(1), Short: "Initialize an encrypted environment scope", RunE: func(cmd *cobra.Command, args []string) error {
 		dir := pathArg(args)
 		absolute, err := filepath.Abs(dir)
 		if err != nil {
 			return err
 		}
+		absolute, err = filepath.EvalSymlinks(absolute)
+		if err != nil {
+			return err
+		}
 		if len(names) == 0 || len(recipientSpecs) == 0 {
 			return errors.New("at least one --name and --recipient are required")
+		}
+		if local && gitLocal {
+			return errors.New("--local and --git-local are mutually exclusive")
+		}
+		mode := config.ScopeModeRepository
+		if local {
+			mode = config.ScopeModeLocal
+		}
+		if gitLocal {
+			mode = config.ScopeModeGitLocal
+		}
+		gitContext, gitErr := scope.InspectGit(absolute)
+		switch mode {
+		case config.ScopeModeRepository:
+			if gitErr != nil {
+				return errors.New("repository mode requires a Git worktree; use --local for an untracked scope")
+			}
+		case config.ScopeModeGitLocal:
+			if gitErr != nil {
+				return errors.New("git-local mode requires a Git worktree")
+			}
+			if gitContext.LinkedWorktree {
+				return errors.New("git-local scopes can only be initialized from the main worktree")
+			}
 		}
 		if err := validateInitPlugin(plugin); err != nil {
 			return err
@@ -74,7 +103,11 @@ func newInit() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		scopeConfig := config.Scope{Schema: 1, Provider: "sops", Source: ".env.sops.yaml", Environment: names, ProviderConfig: map[string]string{"sops_executable": sopsPath, "sops_sha256": hash, "plugin_path": pluginPath}}
+		scopeMode := ""
+		if mode != config.ScopeModeRepository {
+			scopeMode = mode
+		}
+		scopeConfig := config.Scope{Schema: 1, Mode: scopeMode, Provider: "sops", Source: ".env.sops.yaml", Environment: names, ProviderConfig: map[string]string{"sops_executable": sopsPath, "sops_sha256": hash, "plugin_path": pluginPath}}
 		if err := config.ValidateScope(scopeConfig); err != nil {
 			return err
 		}
@@ -108,15 +141,38 @@ func newInit() *cobra.Command {
 			}
 			return fmt.Errorf("sops encryption failed: %s", message)
 		}
-		if err := installInitFiles(recipientsDir, []initFile{
-			{recipientsPath, manifestData, 0644},
-			{sopsConfigPath, sopsConfig, 0644},
-			{scopeConfigPath, scopeData, 0644},
-			{environmentPath, encrypted, 0644},
-		}); err != nil {
+		fileMode := os.FileMode(0644)
+		if mode != config.ScopeModeRepository {
+			fileMode = 0600
+			if gitErr == nil {
+				if err := scope.EnsureLocalIgnored(absolute); err != nil {
+					return err
+				}
+			}
+		}
+		files := []initFile{
+			{recipientsPath, manifestData, fileMode},
+			{sopsConfigPath, sopsConfig, fileMode},
+			{scopeConfigPath, scopeData, fileMode},
+			{environmentPath, encrypted, fileMode},
+		}
+		if err := installInitFiles(recipientsDir, files); err != nil {
 			return err
 		}
-		fmt.Println("scope initialized; review and git add all four files, then run dotenvsec allow")
+		if mode == config.ScopeModeGitLocal {
+			if err := scope.RegisterGitLocal(absolute); err != nil {
+				removeInitFiles(recipientsDir, files)
+				return err
+			}
+		}
+		switch mode {
+		case config.ScopeModeRepository:
+			fmt.Println("repository scope initialized; review and git add all four files, then run dotenvsec allow")
+		case config.ScopeModeLocal:
+			fmt.Println("local scope initialized; files are private and untracked; review them, then run dotenvsec allow")
+		case config.ScopeModeGitLocal:
+			fmt.Println("git-local scope initialized; linked worktrees inherit it read-only; review it, then run dotenvsec allow")
+		}
 		return nil
 	}}
 	cmd.Flags().StringSliceVarP(&names, "name", "n", nil, "expected environment variable (repeatable or comma-separated)")
@@ -124,6 +180,8 @@ func newInit() *cobra.Command {
 	cmd.Flags().StringVarP(&owner, "owner", "o", os.Getenv("USER"), "recipient owner")
 	cmd.Flags().StringVarP(&plugin, "plugin", "p", "age", "age, yubikey, or secure-enclave")
 	cmd.Flags().StringVarP(&sopsPath, "sops", "s", "", "absolute SOPS executable")
+	cmd.Flags().BoolVar(&local, "local", false, "create a private untracked scope that belongs only to this directory tree")
+	cmd.Flags().BoolVar(&gitLocal, "git-local", false, "create a private main-worktree scope inherited read-only by linked worktrees")
 	return cmd
 }
 
@@ -216,10 +274,20 @@ func installInitFiles(recipientsDir string, files []initFile) (err error) {
 	return nil
 }
 
+func removeInitFiles(recipientsDir string, files []initFile) {
+	for _, file := range files {
+		_ = os.Remove(file.path)
+	}
+	_ = os.Remove(recipientsDir)
+}
+
 func newEdit() *cobra.Command {
 	return &cobra.Command{Use: "edit [path]", Args: cobra.MaximumNArgs(1), Short: "Edit the encrypted scope with SOPS", RunE: func(cmd *cobra.Command, args []string) error {
 		prepared, err := app.Prepare(pathArg(args), true)
 		if err != nil {
+			return err
+		}
+		if err := app.EnsureWritable(prepared); err != nil {
 			return err
 		}
 		sopsPath := prepared.Config.ProviderConfig["sops_executable"]
@@ -243,6 +311,9 @@ func newRekey() *cobra.Command {
 	return &cobra.Command{Use: "rekey [path]", Args: cobra.MaximumNArgs(1), Short: "Atomically re-encrypt to active manifest recipients", RunE: func(cmd *cobra.Command, args []string) error {
 		prepared, err := app.Prepare(pathArg(args), true)
 		if err != nil {
+			return err
+		}
+		if err := app.EnsureWritable(prepared); err != nil {
 			return err
 		}
 		var recipients []string
@@ -284,7 +355,11 @@ func newRekey() *cobra.Command {
 		if err != nil {
 			return errors.New("cannot encrypt replacement")
 		}
-		tmp, err := writeTemp(filepath.Dir(prepared.Source), replacement, 0644)
+		sourceInfo, err := os.Stat(prepared.Source)
+		if err != nil {
+			return err
+		}
+		tmp, err := writeTemp(filepath.Dir(prepared.Source), replacement, sourceInfo.Mode().Perm())
 		if err != nil {
 			return err
 		}

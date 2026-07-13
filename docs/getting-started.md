@@ -99,7 +99,20 @@ PIN or touch; SOPS prompts only when it decrypts with a connected matching key.
 If no connected key matches an active recipient, dotenvsec fails before SOPS
 instead of prompting for absent devices.
 
-## 4. Initialize a repository scope
+## 4. Choose and initialize a scope mode
+
+dotenvsec supports three storage modes:
+
+- **Repository** (default): tracked scope files inside a Git worktree.
+- **Local** (`--local`): private untracked files in the selected directory;
+  Git is optional.
+- **Git-local** (`--git-local`): private untracked files in the main worktree,
+  inherited read-only at the same relative path by every linked worktree.
+
+Read [Scope modes and worktrees](scope-modes.md) before choosing local storage.
+Repository mode is the safest default for shared, reviewed configuration.
+
+### Repository mode
 
 Run initialization inside an existing Git worktree. For one standard age
 recipient:
@@ -133,6 +146,43 @@ recipients and should not request a YubiKey PIN or touch. For hardware plugins,
 initialization locates the corresponding `age-plugin-*` executable in `PATH` and
 records its directory in the repository's checksum-approved provider policy.
 
+### Local mode
+
+Use local mode for a scope that must stay on one filesystem and must not be
+tracked. It also works outside Git:
+
+```sh
+dotenvsec i --local \
+  -n API_TOKEN,DATABASE_URL \
+  -r "primary=$RECIPIENT" \
+  -s "$(command -v sops)"
+```
+
+Inside a Git worktree, initialization adds exact entries to the worktree's Git
+exclude mechanism so all four files remain ignored. dotenvsec subsequently
+rejects a local file that is not ignored, is force-added to Git, has group/world
+permissions, or is a symlink. Outside Git, the selected local directory is the
+scope boundary and moving it requires a new local approval.
+
+### Git-local mode
+
+Run Git-local initialization only from the main worktree:
+
+```sh
+dotenvsec i --git-local \
+  -n API_TOKEN,DATABASE_URL \
+  -r "primary=$RECIPIENT" \
+  -s "$(command -v sops)"
+```
+
+The four private files remain in that main-worktree directory. A private
+registry at `$GIT_COMMON_DIR/dotenvsec/registry.yaml` records only the owner
+worktree and relative scope paths. Linked worktrees resolve the same encrypted
+scope at the corresponding relative path without copying or symlinking files.
+They may run `status`, `doctor`, `exec`, `shell`, and hook activation, but
+`allow`, `edit`, and `rekey` must run from the main worktree. `status` reports
+the inherited owner path.
+
 Initialization is transactional. It creates all four files or none:
 
 - `.dotenv-sec.yaml` — scope policy and checksum-pinned SOPS path
@@ -140,9 +190,9 @@ Initialization is transactional. It creates all four files or none:
 - `.sops.yaml` — creation rule generated from active recipients
 - `.env.sops.yaml` — encrypted environment with `CHANGE_ME` placeholders
 
-It never writes plaintext environment values to the repository.
+It never writes plaintext environment values to the scope directory.
 
-## 5. Review, track, and approve
+## 5. Review, optionally track, and approve
 
 Inspect the policy and public metadata before trusting it:
 
@@ -152,13 +202,26 @@ git diff --no-index /dev/null .dotenv-sec/recipients.yaml || true
 git diff --no-index /dev/null .sops.yaml || true
 ```
 
-Stage all four generated files. `dotenvsec allow` deliberately rejects
-untracked scope inputs:
+For repository mode, stage all four generated files. `dotenvsec allow`
+deliberately rejects untracked repository scope inputs:
 
 ```sh
 git add .dotenv-sec.yaml .dotenv-sec/recipients.yaml .sops.yaml .env.sops.yaml
 dotenvsec allow
 ```
+
+For local and Git-local mode, do **not** stage anything. Confirm the files are
+ignored/private, review them from the owner directory, and approve:
+
+```sh
+git status --ignored --short  # when inside Git
+dotenvsec status
+dotenvsec allow
+```
+
+Git-local approval is shared by linked worktrees because they represent the
+same repository and relative scope. Linked worktrees cannot create or replace
+that approval; review and approve only in the main worktree.
 
 Approval stores a local trust hash in `settings.yaml`; it does not modify the
 repository. Changes to recipients, declared variable names, provider checksum,
@@ -259,6 +322,19 @@ a provider.
 
 Review and stage all four generated files before `dotenvsec allow` or other
 trusted operations.
+
+### `local scope file must be ignored by Git`
+
+Local and Git-local files inside Git must be ignored and untracked. Do not force
+add them. Initialization normally writes exact entries to Git's local exclude
+file; inspect `.git/info/exclude` through the main repository's common Git
+directory if an entry was removed.
+
+### `scope is inherited read-only`
+
+The selected Git-local scope belongs to the main worktree. Run `allow`, `edit`,
+or `rekey` from the owner path printed by `dotenvsec status`. Read/decrypt
+operations remain available from the linked worktree.
 
 ### `scope is not locally approved`
 

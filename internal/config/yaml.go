@@ -107,6 +107,11 @@ func ValidateScope(c Scope) error {
 	if c.Schema != ScopeSchemaVersion {
 		return fmt.Errorf("unsupported scope schema %d", c.Schema)
 	}
+	switch c.EffectiveMode() {
+	case ScopeModeRepository, ScopeModeLocal, ScopeModeGitLocal:
+	default:
+		return fmt.Errorf("unsupported scope mode %q", c.Mode)
+	}
 	if c.Provider == "" || c.Source == "" {
 		return errors.New("provider and source are required")
 	}
