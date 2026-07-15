@@ -1,9 +1,11 @@
 package app
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
+
+	"github.com/philband/dotenvsec/internal/scope"
 )
 
 type Status struct {
@@ -22,7 +24,7 @@ type Status struct {
 func Inspect(path string) (Status, error) {
 	prepared, err := Prepare(path, false)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, scope.ErrNotConfigured) {
 			return Status{}, nil
 		}
 		return Status{}, err

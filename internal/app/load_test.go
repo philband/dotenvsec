@@ -82,6 +82,27 @@ func TestEnsureWritableRejectsInheritedScope(t *testing.T) {
 	}
 }
 
+func TestInspectTreatsUnconfiguredDirectoriesAsNoScope(t *testing.T) {
+	for name, setup := range map[string]func(*testing.T) string{
+		"outside Git": func(t *testing.T) string { return t.TempDir() },
+		"Git worktree": func(t *testing.T) string {
+			directory := t.TempDir()
+			runLoadGit(t, directory, "init")
+			return directory
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			status, err := Inspect(setup(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.Configured {
+				t.Fatalf("unexpected configured status: %#v", status)
+			}
+		})
+	}
+}
+
 func runLoadGit(t *testing.T, directory string, arguments ...string) {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
