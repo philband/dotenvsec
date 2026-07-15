@@ -295,6 +295,11 @@ loading work. Add the matching command to `~/.zshrc` or `~/.bashrc`:
 eval "$(dotenvsec hook zsh)"
 ```
 
+The global hook is silent in directories without a configured scope, whether
+or not they are inside Git. Entering an unconfigured directory still clears any
+environment values managed by the previous scope. Errors from a discovered but
+broken or unapproved scope remain visible.
+
 ## Troubleshooting initialization
 
 ### `at least one --name and --recipient are required`

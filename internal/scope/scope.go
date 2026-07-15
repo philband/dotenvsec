@@ -16,6 +16,8 @@ import (
 
 const ConfigName = ".dotenv-sec.yaml"
 
+var ErrNotConfigured = fmt.Errorf("scope is not configured: %w", os.ErrNotExist)
+
 type Identity struct {
 	RepositoryID string
 	RelativePath string
@@ -35,7 +37,11 @@ func Resolve(start string) (Identity, error) {
 	}
 	gitContext, gitErr := InspectGit(physical)
 	if gitErr != nil {
-		return resolveFilesystemLocal(physical)
+		identity, localErr := resolveFilesystemLocal(physical)
+		if errors.Is(localErr, os.ErrNotExist) {
+			return identity, ErrNotConfigured
+		}
+		return identity, localErr
 	}
 	if !contained(gitContext.WorktreeRoot, physical) {
 		return Identity{}, errors.New("start path is outside active worktree")
@@ -54,7 +60,7 @@ func Resolve(start string) (Identity, error) {
 	if inheritedErr == nil {
 		return inherited.identity, nil
 	}
-	return Identity{RepositoryID: repositoryID(gitContext.CommonGitDir), Mode: config.ScopeModeRepository, WorktreeRoot: gitContext.WorktreeRoot, StorageRoot: gitContext.WorktreeRoot, CommonGitDir: gitContext.CommonGitDir}, os.ErrNotExist
+	return Identity{RepositoryID: repositoryID(gitContext.CommonGitDir), Mode: config.ScopeModeRepository, WorktreeRoot: gitContext.WorktreeRoot, StorageRoot: gitContext.WorktreeRoot, CommonGitDir: gitContext.CommonGitDir}, ErrNotConfigured
 }
 
 func ResolveSource(id Identity, relative string) (string, error) {

@@ -1,6 +1,7 @@
 package scope
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,7 +43,7 @@ func TestNestedRepositoryBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	runGit(t, inner, "init")
-	if _, err := Resolve(inner); !os.IsNotExist(err) {
+	if _, err := Resolve(inner); !errors.Is(err, ErrNotConfigured) {
 		t.Fatalf("nested repository inherited outer scope: %v", err)
 	}
 }

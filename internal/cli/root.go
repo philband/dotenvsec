@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -166,37 +167,41 @@ func newActivate() *cobra.Command {
 	var shell string
 	var current string
 	cmd := &cobra.Command{Use: "activate [path]", Hidden: true, Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		prepared, prepareErr := app.Prepare(pathArg(args), true)
-		if prepareErr == nil && current == app.Marker(prepared) {
-			return nil
-		}
-		loaded, err := app.Load(cmd.Context(), pathArg(args))
-		if err != nil {
-			fmt.Print(environment.ClearScript())
-			if !errors.Is(err, os.ErrNotExist) {
-				fmt.Fprintln(os.Stderr, "dotenvsec:", err)
-			}
-			return nil
-		}
-		defer environment.Zero(loaded.Environment)
-		if prepareErr != nil {
-			prepared, prepareErr = app.Prepare(pathArg(args), true)
-		}
-		if prepareErr != nil {
-			fmt.Print(environment.ClearScript())
-			return prepareErr
-		}
-		script, err := environment.Transition(shell, app.Marker(prepared), loaded.Environment, loaded.Unset)
-		if err != nil {
-			fmt.Print(environment.ClearScript())
-			return err
-		}
-		fmt.Print(script)
-		return nil
+		return activate(cmd.Context(), pathArg(args), shell, current, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	}}
 	cmd.Flags().StringVar(&shell, "shell", "", "target shell")
 	cmd.Flags().StringVar(&current, "current", "", "current scope marker")
 	return cmd
+}
+
+func activate(ctx context.Context, path, shell, current string, stdout, stderr io.Writer) error {
+	prepared, prepareErr := app.Prepare(path, true)
+	if prepareErr == nil && current == app.Marker(prepared) {
+		return nil
+	}
+	loaded, err := app.Load(ctx, path)
+	if err != nil {
+		_, _ = fmt.Fprint(stdout, environment.ClearScript())
+		if !errors.Is(err, scope.ErrNotConfigured) {
+			_, _ = fmt.Fprintln(stderr, "dotenvsec:", err)
+		}
+		return nil
+	}
+	defer environment.Zero(loaded.Environment)
+	if prepareErr != nil {
+		prepared, prepareErr = app.Prepare(path, true)
+	}
+	if prepareErr != nil {
+		_, _ = fmt.Fprint(stdout, environment.ClearScript())
+		return prepareErr
+	}
+	script, err := environment.Transition(shell, app.Marker(prepared), loaded.Environment, loaded.Unset)
+	if err != nil {
+		_, _ = fmt.Fprint(stdout, environment.ClearScript())
+		return err
+	}
+	_, _ = fmt.Fprint(stdout, script)
+	return nil
 }
 
 func newExec() *cobra.Command {
