@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -530,27 +531,36 @@ func checkSOPSVersion(ctx context.Context, executable, minimum string) error {
 	if found == nil {
 		return errors.New("cannot parse sops version")
 	}
-	if compareVersions(found[1:], strings.Split(minimum, ".")) < 0 {
+	older, err := belowFloor(found[1:], minimum)
+	if err != nil {
+		return err
+	}
+	if older {
 		return fmt.Errorf("scope requires sops %s or newer; bound executable is %s", minimum, found[0])
 	}
 	return nil
 }
 
-func compareVersions(actual, minimum []string) int {
-	for index := 0; index < len(minimum); index++ {
-		var want, got int
-		fmt.Sscanf(minimum[index], "%d", &want)
+// belowFloor compares the parsed version components against the declared floor.
+// Unparsable input is an error rather than a silent pass, so a malformed version
+// cannot satisfy a floor by accident.
+func belowFloor(actual []string, minimum string) (bool, error) {
+	for index, part := range strings.Split(minimum, ".") {
+		want, err := strconv.Atoi(part)
+		if err != nil {
+			return false, fmt.Errorf("invalid sops_min_version %q", minimum)
+		}
+		got := 0
 		if index < len(actual) {
-			fmt.Sscanf(actual[index], "%d", &got)
+			if got, err = strconv.Atoi(actual[index]); err != nil {
+				return false, errors.New("cannot parse sops version")
+			}
 		}
 		if got != want {
-			if got < want {
-				return -1
-			}
-			return 1
+			return got < want, nil
 		}
 	}
-	return 0
+	return false, nil
 }
 
 func defaultPolicy(plugin string) map[string]string {
