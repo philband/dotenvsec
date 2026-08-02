@@ -346,7 +346,7 @@ func newRekey() *cobra.Command {
 			return errors.New("cannot decrypt existing source")
 		}
 		defer zeroBytes(plain)
-		encrypt := exec.CommandContext(cmd.Context(), sopsPath, "encrypt", "--input-type", "yaml", "--output-type", "yaml", "--age", strings.Join(recipients, ","), "/dev/stdin")
+		encrypt := exec.CommandContext(cmd.Context(), sopsPath, "encrypt", "--filename-override", prepared.Config.Source, "--input-type", "yaml", "--output-type", "yaml", "--age", strings.Join(recipients, ","), "/dev/stdin")
 		encrypt.Dir = prepared.Identity.Directory
 		encrypt.Stdin = bytes.NewReader(plain)
 		encrypt.Stderr = os.Stderr
