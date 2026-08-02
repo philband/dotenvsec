@@ -1,4 +1,4 @@
-schema: 1
+schema: 2
 provider: sops
 source: .env.sops.yaml
 environment:
@@ -10,6 +10,4 @@ unset:
 allow_dangerous: []
 cache_ttl: 0s
 provider_config:
-  sops_executable: /usr/local/bin/sops
-  sops_sha256: REPLACE_WITH_PINNED_SHA256
-  plugin_path: /usr/local/bin
+  sops_min_version: "3.10.0"

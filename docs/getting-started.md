@@ -300,6 +300,39 @@ or not they are inside Git. Entering an unconfigured directory still clears any
 environment values managed by the previous scope. Errors from a discovered but
 broken or unapproved scope remain visible.
 
+## Upgrading a schema 1 scope
+
+Schema 1 stored `sops_executable`, `sops_sha256`, and `plugin_path` in the
+tracked scope file. That made one committed file unable to describe more than a
+single machine, and turned every SOPS upgrade into a tracked-file edit that broke
+the scope for everyone else. Schema 2 keeps only portable policy in the scope
+file and holds the binding in the local provider registry.
+
+Run once per scope, from the main worktree:
+
+```sh
+dotenvsec migrate
+git diff .dotenv-sec.yaml
+```
+
+`migrate` binds the recorded SOPS executable and plugin path into local settings,
+rewrites the scope file as schema 2, and preserves portable keys such as
+`sops_min_version`. It refuses to run twice.
+
+In repository mode, review and commit the rewritten scope file. Then, on **every
+machine** that uses the scope, bind the local tool and re-approve — the trust
+hash changes, and the binding is per-machine by design:
+
+```sh
+dotenvsec provider retool sops sops "$(command -v sops)"
+dotenvsec allow
+dotenvsec doctor
+```
+
+Colleagues on other platforms now bind their own paths without touching the
+repository. If a machine has no SOPS recorded to migrate, `migrate` says so; bind
+it with `provider retool` first.
+
 ## Troubleshooting initialization
 
 ### `at least one --name and --recipient are required`
@@ -383,20 +416,26 @@ may then require the configured PIN and touch policy.
 ### `age-plugin-yubikey` is not found during `exec` or `shell`
 
 Provider-based loading uses a restricted `PATH`. Run `dotenvsec doctor`; it
-checks every age plugin required by active recipients. Scopes initialized by
-older releases may contain only the SOPS directory in `provider_config.plugin_path`.
-After review, add the absolute directory containing the plugin to that path
-list, stage the scope change, and run `dotenvsec allow` again. For example on
-macOS with a Cargo-installed plugin:
+checks every age plugin required by active recipients, resolving them exactly as
+the loading path does.
 
-```yaml
-provider_config:
-  plugin_path: /Users/example/.cargo/bin:/opt/homebrew/bin
+The search path is local machine state, so widening it needs no scope edit, no
+commit, and no re-approval:
+
+```sh
+dotenvsec provider retool sops sops "$(command -v sops)" \
+  --plugin-path /Users/example/.cargo/bin:/opt/homebrew/bin
 ```
 
-New initialization detects this path automatically. Repository plugin paths are
-trusted policy; do not copy an unreviewed path or point them at writable project
-directories.
+`init` detects the directory automatically when the plugin is already installed.
+The default search path covers `/opt/homebrew/bin` on macOS plus the standard
+system directories; Homebrew on Linux (`/home/linuxbrew/.linuxbrew/bin`) and
+other non-standard prefixes must be added explicitly.
+
+Releases before this one skipped any plugin installed as a symlink, which is how
+Homebrew publishes every binary, so a Homebrew `age-plugin-yubikey` was reported
+as missing while `doctor` still passed. Symlinks are now resolved and the
+canonical target is checked.
 
 ### `refusing to overwrite`
 

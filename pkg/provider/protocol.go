@@ -2,9 +2,17 @@
 package provider
 
 const (
-	ProtocolVersion = 1
+	ProtocolVersion = 2
 	MaxMessageBytes = 1 << 20
 )
+
+// Tool is an external executable the provider may launch, resolved by the
+// parent from its local registry. Repository configuration can never name one:
+// Config carries policy only, and the parent overwrites Tools before dispatch.
+type Tool struct {
+	Executable string `json:"executable"`
+	SHA256     string `json:"sha256"`
+}
 
 type Scope struct {
 	RepositoryID string `json:"repository_id"`
@@ -19,6 +27,8 @@ type Request struct {
 	ExpectedNames []string          `json:"expected_names"`
 	Unset         []string          `json:"unset,omitempty"`
 	Config        map[string]string `json:"config,omitempty"`
+	Tools         map[string]Tool   `json:"tools,omitempty"`
+	IdentityPath  string            `json:"identity_path,omitempty"`
 }
 
 type Error struct {

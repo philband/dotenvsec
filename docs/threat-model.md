@@ -10,7 +10,7 @@ Plaintext must remain in process memory only. It must not be written to logs, co
 
 - Scope files are untrusted until their policy hash is explicitly approved locally. Repository mode adds Git tracking/review; local modes deliberately do not.
 - Encrypted value rotation alone does not invalidate approval; schema, provider selection, source path, expected names, dangerous-variable exceptions, or recipient/config policy changes do.
-- Provider executables are selected only through a per-user registry and checked for absolute path, ownership, regular-file status, safe permissions, and SHA-256 before every launch.
+- Provider executables, and any external tool they launch, are selected only through a per-user registry and checked for absolute path, ownership, regular-file status, safe permissions, and SHA-256 before every launch. Paths are canonicalized when bound, so the checksummed file is the executed file with no intervening symlink. A tracked scope file cannot name an executable, a checksum, or a search path.
 - Shell hooks are static output from this binary and never source repository code.
 - Git defines repository and worktree boundaries for repository/Git-local modes. A standalone local scope uses its canonical directory as its identity and boundary.
 - Local and Git-local files must be private regular non-symlink files. Inside Git they must also be ignored and untracked; forced tracking fails closed.

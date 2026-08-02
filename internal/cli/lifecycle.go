@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -22,7 +24,7 @@ import (
 func newInit() *cobra.Command {
 	var names []string
 	var recipientSpecs []string
-	var owner, plugin, sopsPath string
+	var owner, plugin, sopsPath, minVersion string
 	var local, gitLocal bool
 	cmd := &cobra.Command{Use: "init [path]", Aliases: []string{"i"}, Args: cobra.MaximumNArgs(1), Short: "Initialize an encrypted environment scope", RunE: func(cmd *cobra.Command, args []string) error {
 		dir := pathArg(args)
@@ -95,19 +97,24 @@ func newInit() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		hash, err := provider.FileSHA256(sopsPath)
+		pluginPath, err := initPluginPath(plugin, sopsPath)
 		if err != nil {
 			return err
 		}
-		pluginPath, err := initPluginPath(plugin, sopsPath)
-		if err != nil {
+		// Bind the executable in the local registry before writing any scope file,
+		// so a machine that cannot be bound never gets a scope it cannot load.
+		if _, err := bindTool("sops", "sops", sopsPath, pluginPath); err != nil {
 			return err
 		}
 		scopeMode := ""
 		if mode != config.ScopeModeRepository {
 			scopeMode = mode
 		}
-		scopeConfig := config.Scope{Schema: 1, Mode: scopeMode, Provider: "sops", Source: ".env.sops.yaml", Environment: names, ProviderConfig: map[string]string{"sops_executable": sopsPath, "sops_sha256": hash, "plugin_path": pluginPath}}
+		providerConfig := map[string]string{}
+		if minVersion != "" {
+			providerConfig["sops_min_version"] = minVersion
+		}
+		scopeConfig := config.Scope{Schema: config.ScopeSchemaVersion, Mode: scopeMode, Provider: "sops", Source: ".env.sops.yaml", Environment: names, ProviderConfig: providerConfig}
 		if err := config.ValidateScope(scopeConfig); err != nil {
 			return err
 		}
@@ -179,10 +186,117 @@ func newInit() *cobra.Command {
 	cmd.Flags().StringSliceVarP(&recipientSpecs, "recipient", "r", nil, "recipient as ID=PUBLIC_RECIPIENT (repeatable)")
 	cmd.Flags().StringVarP(&owner, "owner", "o", os.Getenv("USER"), "recipient owner")
 	cmd.Flags().StringVarP(&plugin, "plugin", "p", "age", "age, yubikey, or secure-enclave")
-	cmd.Flags().StringVarP(&sopsPath, "sops", "s", "", "absolute SOPS executable")
+	cmd.Flags().StringVarP(&sopsPath, "sops", "s", "", "absolute SOPS executable to bind in the local registry")
+	cmd.Flags().StringVar(&minVersion, "sops-min-version", "", "minimum SOPS version this scope requires, for example 3.10.0")
 	cmd.Flags().BoolVar(&local, "local", false, "create a private untracked scope that belongs only to this directory tree")
 	cmd.Flags().BoolVar(&gitLocal, "git-local", false, "create a private main-worktree scope inherited read-only by linked worktrees")
 	return cmd
+}
+
+// bindTool pins an external executable for a locally registered provider. This
+// is per-user state: the checksum is recorded here rather than in a tracked
+// scope file, so upgrading the tool is a local action with no cross-machine
+// effect. An empty pluginPath leaves any existing search path untouched.
+func bindTool(providerID, tool, executable, pluginPath string) (string, error) {
+	absolute, err := filepath.Abs(executable)
+	if err != nil {
+		return "", err
+	}
+	// Canonicalize: Homebrew and similar managers expose every binary as a
+	// symlink into a versioned directory. Storing the resolved target keeps the
+	// checksummed file and the executed file identical.
+	absolute, err = provider.ResolveExecutable(absolute)
+	if err != nil {
+		return "", err
+	}
+	hash, err := provider.FileSHA256(absolute)
+	if err != nil {
+		return "", err
+	}
+	settings, err := config.LoadSettings()
+	if err != nil {
+		return "", err
+	}
+	entry, registered := settings.Providers[providerID]
+	if !registered {
+		return "", fmt.Errorf("provider %q is not registered locally; run dotenvsec provider register %s <absolute-executable> first", providerID, providerID)
+	}
+	if entry.Tools == nil {
+		entry.Tools = map[string]config.ToolEntry{}
+	}
+	entry.Tools[tool] = config.ToolEntry{Executable: absolute, SHA256: hash}
+	if pluginPath != "" {
+		entry.PluginPath = pluginPath
+	}
+	settings.Providers[providerID] = entry
+	if err := config.SaveSettings(settings); err != nil {
+		return "", err
+	}
+	return absolute, nil
+}
+
+func newMigrate() *cobra.Command {
+	return &cobra.Command{Use: "migrate [path]", Args: cobra.MaximumNArgs(1), Short: "Move machine-local provider config out of a schema 1 scope file", RunE: func(_ *cobra.Command, args []string) error {
+		directory, err := filepath.Abs(pathArg(args))
+		if err != nil {
+			return err
+		}
+		scopePath := filepath.Join(directory, scope.ConfigName)
+		data, err := os.ReadFile(scopePath)
+		if err != nil {
+			return err
+		}
+		var legacy struct {
+			Schema         int               `yaml:"schema"`
+			Mode           string            `yaml:"mode,omitempty"`
+			Provider       string            `yaml:"provider"`
+			Source         string            `yaml:"source"`
+			Environment    []string          `yaml:"environment"`
+			Unset          []string          `yaml:"unset,omitempty"`
+			AllowDangerous []string          `yaml:"allow_dangerous,omitempty"`
+			CacheTTL       config.Duration   `yaml:"cache_ttl,omitempty"`
+			ProviderConfig map[string]string `yaml:"provider_config,omitempty"`
+		}
+		if err := config.DecodeStrict(data, &legacy); err != nil {
+			return err
+		}
+		if legacy.Schema == config.ScopeSchemaVersion {
+			return errors.New("scope is already at the current schema")
+		}
+		if legacy.Schema != 1 {
+			return fmt.Errorf("cannot migrate scope schema %d", legacy.Schema)
+		}
+		sopsPath := legacy.ProviderConfig["sops_executable"]
+		if sopsPath == "" {
+			return errors.New("scope has no sops_executable to migrate; bind it with dotenvsec provider retool")
+		}
+		if _, err := bindTool(legacy.Provider, "sops", sopsPath, legacy.ProviderConfig["plugin_path"]); err != nil {
+			return err
+		}
+		migrated := config.Scope{Schema: config.ScopeSchemaVersion, Mode: legacy.Mode, Provider: legacy.Provider, Source: legacy.Source, Environment: legacy.Environment, Unset: legacy.Unset, AllowDangerous: legacy.AllowDangerous, CacheTTL: legacy.CacheTTL, ProviderConfig: map[string]string{}}
+		for key, value := range legacy.ProviderConfig {
+			if !slices.Contains(config.MachineLocalProviderKeys, key) {
+				migrated.ProviderConfig[key] = value
+			}
+		}
+		if err := config.ValidateScope(migrated); err != nil {
+			return err
+		}
+		encoded, err := config.Marshal(migrated)
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(scopePath)
+		if err != nil {
+			return err
+		}
+		if err := atomicWrite(scopePath, encoded, info.Mode().Perm()); err != nil {
+			return err
+		}
+		fmt.Printf("migrated %s to schema %d; sops is now bound locally\n", scopePath, config.ScopeSchemaVersion)
+		fmt.Println("review the scope diff, commit it in repository mode, then run dotenvsec allow on every machine")
+		return nil
+	}}
 }
 
 var recipientIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -290,8 +404,8 @@ func newEdit() *cobra.Command {
 		if err := app.EnsureWritable(prepared); err != nil {
 			return err
 		}
-		sopsPath := prepared.Config.ProviderConfig["sops_executable"]
-		if err := verifySOPS(prepared); err != nil {
+		sopsPath, err := resolveSOPS(cmd.Context(), prepared)
+		if err != nil {
 			return err
 		}
 		identityPath, cleanupIdentities, err := app.PrepareSOPSIdentities(cmd.Context(), &prepared)
@@ -325,8 +439,8 @@ func newRekey() *cobra.Command {
 		if len(recipients) == 0 {
 			return errors.New("manifest has no active recipients")
 		}
-		sopsPath := prepared.Config.ProviderConfig["sops_executable"]
-		if err := verifySOPS(prepared); err != nil {
+		sopsPath, err := resolveSOPS(cmd.Context(), prepared)
+		if err != nil {
 			return err
 		}
 		identityPath, cleanupIdentities, err := app.PrepareSOPSIdentities(cmd.Context(), &prepared)
@@ -380,19 +494,63 @@ func newRekey() *cobra.Command {
 	}}
 }
 
-func verifySOPS(prepared app.Prepared) error {
-	path, expected := prepared.Config.ProviderConfig["sops_executable"], prepared.Config.ProviderConfig["sops_sha256"]
-	if !filepath.IsAbs(path) || expected == "" {
-		return errors.New("absolute checksum-pinned SOPS executable is required")
+// resolveSOPS returns the SOPS executable bound to this provider in the local
+// registry, after verifying its pinned checksum and any repository-declared
+// version floor. The scope file never names the executable.
+func resolveSOPS(ctx context.Context, prepared app.Prepared) (string, error) {
+	tool, bound := prepared.Provider.Tools["sops"]
+	if !bound {
+		return "", fmt.Errorf("provider %q has no sops tool binding; run dotenvsec provider retool %s sops <absolute-executable>", prepared.Config.Provider, prepared.Config.Provider)
 	}
-	actual, err := provider.FileSHA256(path)
+	if err := provider.VerifyExecutable("tool sops", tool.Executable, tool.SHA256); err != nil {
+		return "", err
+	}
+	if err := checkSOPSVersion(ctx, tool.Executable, prepared.Config.ProviderConfig["sops_min_version"]); err != nil {
+		return "", err
+	}
+	return tool.Executable, nil
+}
+
+var sopsVersionRE = regexp.MustCompile(`([0-9]+)\.([0-9]+)\.([0-9]+)`)
+
+// checkSOPSVersion enforces the optional repository-declared floor. The floor is
+// portable policy: it constrains encryption-format compatibility without naming
+// a path or a checksum, so one tracked file works on every platform.
+func checkSOPSVersion(ctx context.Context, executable, minimum string) error {
+	if minimum == "" {
+		return nil
+	}
+	command := exec.CommandContext(ctx, executable, "--version", "--disable-version-check")
+	command.Env = stableLocaleEnvironment(nil)
+	out, err := command.Output()
 	if err != nil {
-		return err
+		return errors.New("cannot determine sops version")
 	}
-	if !strings.EqualFold(actual, expected) {
-		return errors.New("sops checksum mismatch")
+	found := sopsVersionRE.FindStringSubmatch(string(out))
+	if found == nil {
+		return errors.New("cannot parse sops version")
+	}
+	if compareVersions(found[1:], strings.Split(minimum, ".")) < 0 {
+		return fmt.Errorf("scope requires sops %s or newer; bound executable is %s", minimum, found[0])
 	}
 	return nil
+}
+
+func compareVersions(actual, minimum []string) int {
+	for index := 0; index < len(minimum); index++ {
+		var want, got int
+		fmt.Sscanf(minimum[index], "%d", &want)
+		if index < len(actual) {
+			fmt.Sscanf(actual[index], "%d", &got)
+		}
+		if got != want {
+			if got < want {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }
 
 func defaultPolicy(plugin string) map[string]string {

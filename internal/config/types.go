@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	ScopeSchemaVersion      = 1
+	ScopeSchemaVersion      = 2
 	RecipientsSchemaVersion = 1
 	SettingsSchemaVersion   = 1
 	MaxYAMLBytes            = 1 << 20
@@ -77,11 +77,24 @@ type Settings struct {
 	Editor             string                   `yaml:"editor,omitempty"`
 }
 
+// ProviderEntry binds a symbolic provider ID to local machine state. Everything
+// here is per-user and untracked: absolute paths, checksums, and the plugin
+// search path differ per machine, OS, and architecture, so a tracked scope file
+// cannot describe them.
 type ProviderEntry struct {
-	Executable string   `yaml:"executable"`
-	SHA256     string   `yaml:"sha256"`
-	Timeout    Duration `yaml:"timeout,omitempty"`
-	Source     string   `yaml:"source,omitempty"`
+	Executable string               `yaml:"executable"`
+	SHA256     string               `yaml:"sha256"`
+	Timeout    Duration             `yaml:"timeout,omitempty"`
+	Source     string               `yaml:"source,omitempty"`
+	PluginPath string               `yaml:"plugin_path,omitempty"`
+	Tools      map[string]ToolEntry `yaml:"tools,omitempty"`
+}
+
+// ToolEntry is an external executable a provider shells out to, such as SOPS.
+// It is pinned on registration and verified before every launch.
+type ToolEntry struct {
+	Executable string `yaml:"executable"`
+	SHA256     string `yaml:"sha256"`
 }
 
 type Approval struct {

@@ -15,6 +15,14 @@ import (
 
 var envNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+var versionRE = regexp.MustCompile(`^[0-9]+\.[0-9]+(\.[0-9]+)?$`)
+
+// MachineLocalProviderKeys are provider_config keys that describe this machine
+// rather than repository policy. Schema 1 stored them in the tracked scope file,
+// which made a scope unusable across platforms and turned routine tool upgrades
+// into tracked-file edits. They now live in the local provider registry.
+var MachineLocalProviderKeys = []string{"sops_executable", "sops_sha256", "plugin_path", "identity_paths"}
+
 func DecodeFile(path string, out any) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -121,6 +129,18 @@ func ValidateScope(c Scope) error {
 	if err := validateNameLists(c.Environment, c.Unset, c.AllowDangerous); err != nil {
 		return err
 	}
+	return validateProviderConfig(c.ProviderConfig)
+}
+
+func validateProviderConfig(providerConfig map[string]string) error {
+	for _, key := range MachineLocalProviderKeys {
+		if _, present := providerConfig[key]; present {
+			return fmt.Errorf("provider_config key %q is machine-local and cannot appear in a scope file; run dotenvsec migrate to move it into the local provider registry", key)
+		}
+	}
+	if minimum, present := providerConfig["sops_min_version"]; present && !versionRE.MatchString(minimum) {
+		return fmt.Errorf("sops_min_version %q must be MAJOR.MINOR or MAJOR.MINOR.PATCH", minimum)
+	}
 	return nil
 }
 
@@ -222,18 +242,39 @@ func requireEnvironmentStrings(document *yaml.Node) error {
 	return nil
 }
 
+// ValidateExactEnvironment requires the provider output to carry exactly the
+// declared names. Offending names are reported: they are already cleartext in
+// the scope file and in the encrypted document's keys, so naming them discloses
+// nothing further. Values are never included.
 func ValidateExactEnvironment(actual map[string]string, expected []string) error {
-	want := append([]string(nil), expected...)
-	sort.Strings(want)
-	got := make([]string, 0, len(actual))
-	for k := range actual {
-		got = append(got, k)
+	declared := make(map[string]bool, len(expected))
+	for _, name := range expected {
+		declared[name] = true
 	}
-	sort.Strings(got)
-	if strings.Join(want, "\x00") != strings.Join(got, "\x00") {
-		return fmt.Errorf("provider output names do not match declared environment")
+	var undeclared, missing []string
+	for name := range actual {
+		if !declared[name] {
+			undeclared = append(undeclared, name)
+		}
 	}
-	return nil
+	for _, name := range expected {
+		if _, present := actual[name]; !present {
+			missing = append(missing, name)
+		}
+	}
+	if len(undeclared) == 0 && len(missing) == 0 {
+		return nil
+	}
+	sort.Strings(undeclared)
+	sort.Strings(missing)
+	var detail []string
+	if len(undeclared) > 0 {
+		detail = append(detail, "undeclared: "+strings.Join(undeclared, ", "))
+	}
+	if len(missing) > 0 {
+		detail = append(detail, "missing: "+strings.Join(missing, ", "))
+	}
+	return fmt.Errorf("provider output names do not match declared environment (%s)", strings.Join(detail, "; "))
 }
 
 func validateNameLists(lists ...[]string) error {

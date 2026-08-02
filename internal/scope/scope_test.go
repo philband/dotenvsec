@@ -180,7 +180,7 @@ func writeScope(t *testing.T, directory, mode string) {
 	if err := os.MkdirAll(directory, 0755); err != nil {
 		t.Fatal(err)
 	}
-	scope := config.Scope{Schema: 1, Mode: mode, Provider: "sops", Source: ".env.sops.yaml", Environment: []string{"TOKEN"}}
+	scope := config.Scope{Schema: config.ScopeSchemaVersion, Mode: mode, Provider: "sops", Source: ".env.sops.yaml", Environment: []string{"TOKEN"}}
 	data, err := config.Marshal(scope)
 	if err != nil {
 		t.Fatal(err)

@@ -48,6 +48,27 @@ func TestLoadScopeStrictAndExactNames(t *testing.T) {
 	}
 }
 
+// The offending names are already cleartext in the scope file and in the
+// encrypted document's keys, so reporting them costs nothing and turns an
+// opaque failure into a self-service fix.
+func TestValidateExactEnvironmentNamesTheMismatch(t *testing.T) {
+	err := ValidateExactEnvironment(map[string]string{"A": "1", "EXTRA": "2"}, []string{"A", "GONE"})
+	if err == nil {
+		t.Fatal("mismatch accepted")
+	}
+	for _, want := range []string{"undeclared: EXTRA", "missing: GONE"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not report %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), `"1"`) || strings.Contains(err.Error(), `"2"`) {
+		t.Fatalf("error leaked a value: %v", err)
+	}
+	if err := ValidateExactEnvironment(map[string]string{"A": "1"}, []string{"A"}); err != nil {
+		t.Fatalf("exact match rejected: %v", err)
+	}
+}
+
 func TestValidateScopeModes(t *testing.T) {
 	for _, mode := range []string{"", ScopeModeRepository, ScopeModeLocal, ScopeModeGitLocal} {
 		scope := Scope{Schema: ScopeSchemaVersion, Mode: mode, Provider: "sops", Source: ".env.sops.yaml", Environment: []string{"TOKEN"}}

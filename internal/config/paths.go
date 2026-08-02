@@ -38,6 +38,19 @@ func LoadSettings() (Settings, error) {
 		if entry.Source != "" && entry.Source != "manual" && entry.Source != "bundled" {
 			return settings, errors.New("provider " + id + " has unsupported source")
 		}
+		for _, part := range filepath.SplitList(entry.PluginPath) {
+			if !filepath.IsAbs(part) {
+				return settings, errors.New("provider " + id + " plugin_path entries must be absolute")
+			}
+		}
+		for tool, binding := range entry.Tools {
+			if !filepath.IsAbs(binding.Executable) {
+				return settings, errors.New("provider " + id + " tool " + tool + " executable must be absolute")
+			}
+			if len(binding.SHA256) != 64 {
+				return settings, errors.New("provider " + id + " tool " + tool + " requires a SHA-256 checksum")
+			}
+		}
 	}
 	if settings.Approvals == nil {
 		settings.Approvals = map[string]Approval{}
