@@ -78,6 +78,47 @@ func TestInitMultipleRecipients(t *testing.T) {
 	}
 }
 
+func TestRekeyOverridesFilenameForCreationRules(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repository := t.TempDir()
+	initTestGit(t, repository)
+	sops, arguments := fakeSOPS(t, false)
+
+	initialize := newInit()
+	initialize.SetArgs([]string{repository, "-n", "TOKEN", "-s", sops, "-p", "age", "-r", "primary=age1primary", "-r", "backup=age1backup"})
+	if err := initialize.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, repository, "add", ".")
+	if _, err := app.RegisterProvider("sops", sops, ""); err != nil {
+		t.Fatal(err)
+	}
+	allow := newAllow()
+	allow.SetArgs([]string{repository})
+	if err := allow.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(arguments, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	rekey := newRekey()
+	rekey.SetArgs([]string{repository})
+	if err := rekey.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	args, err := os.ReadFile(arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without --filename-override, SOPS matches the /dev/stdin input path against
+	// the scope creation rule and fails with "no matching creation rules found".
+	if !strings.Contains(string(args), "encrypt\n--filename-override\n.env.sops.yaml\n") {
+		t.Fatalf("rekey does not override the encryption filename:\n%s", args)
+	}
+}
+
 func TestInitEncryptionFailureLeavesNoScope(t *testing.T) {
 	repository := t.TempDir()
 	initTestGit(t, repository)
@@ -286,7 +327,7 @@ func fakeSOPS(t *testing.T, fail bool) (string, string) {
 	directory := t.TempDir()
 	executable := filepath.Join(directory, "sops")
 	arguments := filepath.Join(directory, "arguments")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SOPS_TEST_ARGUMENTS\"\ncat >/dev/null\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$SOPS_TEST_ARGUMENTS\"\ncat >/dev/null\n"
 	if fail {
 		script += "echo 'synthetic SOPS failure' >&2\nexit 1\n"
 	} else {
