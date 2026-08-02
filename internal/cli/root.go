@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -33,7 +32,7 @@ func newRoot() *cobra.Command {
 		_, err := app.RefreshBundledProvider()
 		return err
 	}
-	root.AddCommand(newAllow(), newStatus(), newDoctor(), newHook(), newActivate(), newExec(), newShell(), newProvider(), newSettings(), newAgent(), newScope(), newInit(), newEdit(), newRekey())
+	root.AddCommand(newAllow(), newStatus(), newDoctor(), newHook(), newActivate(), newExec(), newShell(), newProvider(), newSettings(), newAgent(), newScope(), newInit(), newEdit(), newRekey(), newMigrate())
 	return root
 }
 
@@ -131,7 +130,7 @@ func newDoctor() *cobra.Command {
 		checks := []struct {
 			name string
 			err  error
-		}{{"scope boundary and mode", nil}, {"provider checksum", provider.Verify(prepared.Provider)}, {"local approval", approvalError(prepared)}, {"SOPS", executableCheck(prepared.Config.ProviderConfig["sops_executable"])}, {"age plugins", pluginCheck(prepared)}, {"cache TTL", ttlCheck(prepared)}}
+		}{{"scope boundary and mode", nil}, {"provider checksum", provider.Verify(prepared.Provider)}, {"local approval", approvalError(prepared)}, {"SOPS", sopsCheck(prepared)}, {"age plugins", pluginCheck(prepared)}, {"cache TTL", ttlCheck(prepared)}}
 		failed := false
 		for _, check := range checks {
 			if check.err != nil {
@@ -272,7 +271,17 @@ func newProvider() *cobra.Command {
 		return err
 	}}
 	register.Flags().StringVar(&checksum, "sha256", "", "expected SHA-256 (recommended)")
-	root.AddCommand(register, &cobra.Command{Use: "revoke <id>", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error { return app.RevokeProvider(args[0]) }}, &cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
+	var pluginPath string
+	retool := &cobra.Command{Use: "retool <provider-id> <tool> <absolute-executable>", Args: cobra.ExactArgs(3), Short: "Pin an external executable a provider launches", RunE: func(_ *cobra.Command, args []string) error {
+		canonical, err := bindTool(args[0], args[1], args[2], pluginPath)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("bound %s tool %s to %s\n", args[0], args[1], canonical)
+		return nil
+	}}
+	retool.Flags().StringVar(&pluginPath, "plugin-path", "", "absolute directories to prepend to the provider search path")
+	root.AddCommand(register, retool, &cobra.Command{Use: "revoke <id>", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error { return app.RevokeProvider(args[0]) }}, &cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
 		settings, err := config.LoadSettings()
 		if err != nil {
 			return err
@@ -383,20 +392,16 @@ func approvalError(prepared app.Prepared) error {
 	}
 	return nil
 }
-func executableCheck(path string) error {
-	if path == "" {
-		_, err := exec.LookPath("sops")
-		return err
-	}
-	if !filepath.IsAbs(path) {
-		return errors.New("SOPS executable is not absolute")
-	}
-	_, err := os.Stat(path)
+
+// sopsCheck reports the same binding the loading path uses, so a healthy doctor
+// implies a loadable scope.
+func sopsCheck(prepared app.Prepared) error {
+	_, err := resolveSOPS(context.Background(), prepared)
 	return err
 }
 
 func pluginCheck(prepared app.Prepared) error {
-	path, err := provider.SafePath(prepared.Config.ProviderConfig["plugin_path"])
+	path, err := provider.SafePath(prepared.Provider.PluginPath)
 	if err != nil {
 		return err
 	}
@@ -414,22 +419,14 @@ func pluginCheck(prepared app.Prepared) error {
 			required["age-plugin-se"] = true
 		}
 	}
+	// Resolve exactly as the loading path does. A weaker check here reported a
+	// healthy plugin that identity discovery then refused.
 	for executable := range required {
-		if !executableExistsInPath(executable, path) {
-			return fmt.Errorf("%s not found in provider plugin path", executable)
+		if _, err := provider.FindInPath(executable, path); err != nil {
+			return err
 		}
 	}
 	return nil
-}
-
-func executableExistsInPath(name, path string) bool {
-	for _, directory := range filepath.SplitList(path) {
-		info, err := os.Stat(filepath.Join(directory, name))
-		if err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
-			return true
-		}
-	}
-	return false
 }
 func ttlCheck(prepared app.Prepared) error {
 	ttl, maximum := prepared.Config.CacheTTL.Duration, prepared.Settings.MaximumCacheTTL.Duration

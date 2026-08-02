@@ -22,7 +22,7 @@ func PrepareSOPSIdentities(ctx context.Context, prepared *Prepared) (string, fun
 	if len(prepared.Settings.IdentityPaths) == 1 {
 		configured = prepared.Settings.IdentityPaths[0]
 	}
-	result, err := identity.PrepareConnectedYubiKeys(ctx, configured, prepared.Config.ProviderConfig["plugin_path"], allowed)
+	result, err := identity.PrepareConnectedYubiKeys(ctx, configured, prepared.Provider.PluginPath, allowed)
 	if err != nil {
 		return "", nil, err
 	}

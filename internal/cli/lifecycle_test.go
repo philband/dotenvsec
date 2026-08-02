@@ -59,8 +59,26 @@ func TestInitMultipleRecipients(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(scopeConfig.ProviderConfig["plugin_path"], filepath.Dir(sops)) {
-		t.Fatalf("plugin path does not include detected plugin directory: %q", scopeConfig.ProviderConfig["plugin_path"])
+	// The tracked scope file must stay portable: no absolute paths, no checksums.
+	for _, key := range config.MachineLocalProviderKeys {
+		if _, present := scopeConfig.ProviderConfig[key]; present {
+			t.Fatalf("machine-local key %q leaked into the tracked scope file", key)
+		}
+	}
+	settings, err := config.LoadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := settings.Providers["sops"]
+	canonical, err := filepath.EvalSymlinks(sops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Tools["sops"].Executable != canonical {
+		t.Fatalf("sops was not bound in the local registry: %#v", entry.Tools)
+	}
+	if !strings.Contains(entry.PluginPath, filepath.Dir(sops)) {
+		t.Fatalf("plugin path does not include detected plugin directory: %q", entry.PluginPath)
 	}
 
 	args, err := os.ReadFile(arguments)
@@ -79,7 +97,6 @@ func TestInitMultipleRecipients(t *testing.T) {
 }
 
 func TestRekeyOverridesFilenameForCreationRules(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
 	repository := t.TempDir()
 	initTestGit(t, repository)
 	sops, arguments := fakeSOPS(t, false)
@@ -90,9 +107,6 @@ func TestRekeyOverridesFilenameForCreationRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	runTestGit(t, repository, "add", ".")
-	if _, err := app.RegisterProvider("sops", sops, ""); err != nil {
-		t.Fatal(err)
-	}
 	allow := newAllow()
 	allow.SetArgs([]string{repository})
 	if err := allow.Execute(); err != nil {
@@ -322,6 +336,9 @@ func TestNormalizeEditor(t *testing.T) {
 	}
 }
 
+// fakeSOPS provides an isolated local environment: a stub SOPS that records its
+// argv, a private HOME so tests never touch real user settings, and a registered
+// provider, since binding a tool requires one.
 func fakeSOPS(t *testing.T, fail bool) (string, string) {
 	t.Helper()
 	directory := t.TempDir()
@@ -342,6 +359,12 @@ func fakeSOPS(t *testing.T, fail bool) (string, string) {
 	}
 	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("SOPS_TEST_ARGUMENTS", arguments)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	if _, err := app.RegisterProvider("sops", executable, ""); err != nil {
+		t.Fatal(err)
+	}
 	return executable, arguments
 }
 

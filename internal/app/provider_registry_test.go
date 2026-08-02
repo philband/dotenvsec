@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/philband/dotenvsec/internal/config"
+	localprovider "github.com/philband/dotenvsec/internal/provider"
 	"github.com/philband/dotenvsec/internal/scope"
 	"github.com/philband/dotenvsec/internal/trust"
 )
@@ -157,6 +158,55 @@ func TestRefreshBundledProviderPreservesManualOverride(t *testing.T) {
 	}
 	if settings.Providers["sops"].Executable != manual {
 		t.Fatal("manual provider was overwritten")
+	}
+}
+
+// Tool bindings are independent local state. Re-registering a provider, which
+// happens automatically whenever an upgrade moves the bundled executable, must
+// not silently unbind SOPS and strand every scope on the machine.
+func TestReRegisterProviderPreservesToolBindings(t *testing.T) {
+	configureTestHome(t)
+	directory := t.TempDir()
+	first := writeAppExecutable(t, directory, "provider-v1", "provider one")
+	second := writeAppExecutable(t, directory, "provider-v2", "provider two")
+	if _, err := RegisterProvider("sops", first, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, err := config.LoadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := settings.Providers["sops"]
+	tool := writeAppExecutable(t, directory, "sops", "sops binary")
+	toolSHA, err := localprovider.FileSHA256(tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry.Tools = map[string]config.ToolEntry{"sops": {Executable: tool, SHA256: toolSHA}}
+	entry.PluginPath = directory
+	settings.Providers["sops"] = entry
+	if err := config.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RegisterProvider("sops", second, ""); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = config.LoadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebound := settings.Providers["sops"]
+	canonicalSecond, err := filepath.EvalSymlinks(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebound.Executable != canonicalSecond {
+		t.Fatalf("provider executable was not rebound: %q", rebound.Executable)
+	}
+	if rebound.Tools["sops"].Executable != tool || rebound.PluginPath != directory {
+		t.Fatalf("tool binding lost on re-registration: %#v", rebound)
 	}
 }
 

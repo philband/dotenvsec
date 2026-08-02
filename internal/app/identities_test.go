@@ -22,12 +22,12 @@ func TestPrepareSOPSIdentitiesFillsSettingsFromConnectedYubiKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	prepared := Prepared{
-		Config: config.Scope{ProviderConfig: map[string]string{"plugin_path": pluginDirectory}},
+		Config: config.Scope{},
 		Manifest: config.RecipientManifest{Recipients: []config.Recipient{{
 			Status: "active", Plugin: "yubikey", Recipient: "age1yubikey1test",
 		}}},
 		Settings:  config.Settings{Schema: config.SettingsSchemaVersion, Providers: map[string]config.ProviderEntry{}},
-		Provider:  config.ProviderEntry{SHA256: "provider"},
+		Provider:  config.ProviderEntry{SHA256: "provider", PluginPath: pluginDirectory},
 		Source:    source,
 		TrustHash: "trust",
 	}

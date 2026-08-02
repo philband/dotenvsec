@@ -5,13 +5,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/philband/dotenvsec/internal/config"
@@ -44,7 +42,7 @@ func PrepareConnectedYubiKeys(ctx context.Context, configuredPath, pluginPath st
 	if err != nil {
 		return Prepared{}, err
 	}
-	plugin, err := findExecutable("age-plugin-yubikey", safePath)
+	plugin, err := provider.FindInPath("age-plugin-yubikey", safePath)
 	if err != nil {
 		return Prepared{}, err
 	}
@@ -154,24 +152,6 @@ func parseConnected(data []byte, allowed map[string]bool) ([]string, error) {
 		return nil, errors.New("cannot parse YubiKey identity discovery output")
 	}
 	return identities, nil
-}
-
-func findExecutable(name, path string) (string, error) {
-	for _, directory := range filepath.SplitList(path) {
-		candidate := filepath.Join(directory, name)
-		info, err := os.Lstat(candidate)
-		if err != nil {
-			continue
-		}
-		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0111 == 0 || info.Mode().Perm()&0022 != 0 {
-			continue
-		}
-		if stat, ok := info.Sys().(*syscall.Stat_t); ok && int(stat.Uid) != os.Getuid() && stat.Uid != 0 {
-			continue
-		}
-		return candidate, nil
-	}
-	return "", fmt.Errorf("%s not found in provider plugin path", name)
 }
 
 func readOptionalPrivateFile(path string) ([]byte, error) {

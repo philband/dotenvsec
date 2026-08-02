@@ -62,7 +62,7 @@ func TestActivateReportsBrokenConfiguredScope(t *testing.T) {
 
 func TestActivateReportsMissingConfiguredScopeFile(t *testing.T) {
 	directory := t.TempDir()
-	policy := "schema: 1\nmode: local\nprovider: sops\nsource: .env.sops.yaml\nenvironment: [TOKEN]\n"
+	policy := "schema: 2\nmode: local\nprovider: sops\nsource: .env.sops.yaml\nenvironment: [TOKEN]\n"
 	if err := os.WriteFile(filepath.Join(directory, ".dotenv-sec.yaml"), []byte(policy), 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -20,6 +20,9 @@ func Run(ctx context.Context, entry config.ProviderEntry, req protocol.Request) 
 	if err := Verify(entry); err != nil {
 		return response, fmt.Errorf("verify provider: %w", err)
 	}
+	if err := VerifyTools(entry); err != nil {
+		return response, fmt.Errorf("verify provider: %w", err)
+	}
 	timeout := entry.Timeout.Duration
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
@@ -29,6 +32,13 @@ func Run(ctx context.Context, entry config.ProviderEntry, req protocol.Request) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// Tools and the plugin search path come from the local registry only. Setting
+	// them here, after the caller has built the request, means repository policy
+	// cannot name an executable or influence the child's PATH.
+	req.Tools = make(map[string]protocol.Tool, len(entry.Tools))
+	for name, tool := range entry.Tools {
+		req.Tools[name] = protocol.Tool{Executable: tool.Executable, SHA256: tool.SHA256}
+	}
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return response, err
@@ -36,7 +46,7 @@ func Run(ctx context.Context, entry config.ProviderEntry, req protocol.Request) 
 	if len(payload) > protocol.MaxMessageBytes {
 		return response, errors.New("provider request too large")
 	}
-	path, err := SafePath(req.Config["plugin_path"])
+	path, err := SafePath(entry.PluginPath)
 	if err != nil {
 		return response, err
 	}

@@ -30,9 +30,18 @@ func RegisterProvider(id, executable, expectedSHA string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Re-registering rebinds the provider executable only. Tool bindings and the
+	// plugin search path are independent local state and must survive, or every
+	// upgrade would silently unbind SOPS.
 	entry := config.ProviderEntry{Executable: canonical, SHA256: actual, Source: "manual"}
-	if err := localprovider.Verify(entry); err != nil {
+	// Verify only what is being registered. Tool bindings are verified before
+	// launch; failing here would make a stale SOPS binding block re-registering
+	// the provider, which is the very command needed to recover.
+	if err := localprovider.VerifyExecutable("provider", entry.Executable, entry.SHA256); err != nil {
 		return "", err
+	}
+	if previous, exists := settings.Providers[id]; exists {
+		entry.Tools, entry.PluginPath, entry.Timeout = previous.Tools, previous.PluginPath, previous.Timeout
 	}
 	settings.Providers[id] = entry
 	if err := config.SaveSettings(settings); err != nil {
@@ -66,6 +75,9 @@ func RefreshBundledProviderFrom(mainExecutable string) (bool, error) {
 		return false, nil
 	}
 	entry.Source = "bundled"
+	if exists {
+		entry.Tools, entry.PluginPath, entry.Timeout = current.Tools, current.PluginPath, current.Timeout
+	}
 	if exists && current.Executable == entry.Executable && current.SHA256 == entry.SHA256 && current.Source == entry.Source {
 		return false, nil
 	}

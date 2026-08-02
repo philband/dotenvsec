@@ -44,22 +44,22 @@ func run() error {
 	if !filepath.IsAbs(req.Source) {
 		return errors.New("source must be absolute")
 	}
-	sops := req.Config["sops_executable"]
-	if sops == "" {
-		sops, err = exec.LookPath("sops")
-		if err != nil {
-			return errors.New("sops not found")
-		}
+	// The parent resolves this from its local registry; there is deliberately no
+	// PATH fallback, so an unbound tool fails closed instead of running whichever
+	// sops happens to be first on PATH.
+	tool, bound := req.Tools["sops"]
+	if !bound {
+		return errors.New("no sops tool binding in request; run dotenvsec provider retool sops")
 	}
-	if !filepath.IsAbs(sops) {
+	if !filepath.IsAbs(tool.Executable) {
 		return errors.New("sops executable must be absolute")
 	}
-	expected := req.Config["sops_sha256"]
-	if expected == "" {
+	if tool.SHA256 == "" {
 		return errors.New("sops checksum is required")
 	}
+	sops := tool.Executable
 	actual, hashErr := localprovider.FileSHA256(sops)
-	if hashErr != nil || !strings.EqualFold(actual, expected) {
+	if hashErr != nil || !strings.EqualFold(actual, tool.SHA256) {
 		return errors.New("sops checksum mismatch")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -68,8 +68,8 @@ func run() error {
 	cmd.Dir = req.Scope.WorktreeRoot
 	cmd.Stderr = os.Stderr
 	cmd.Env = []string{"HOME=" + os.Getenv("HOME"), "USER=" + os.Getenv("USER"), "PATH=" + os.Getenv("PATH"), "LANG=C", "LC_ALL=C"}
-	if identities := req.Config["identity_paths"]; identities != "" {
-		cmd.Env = append(cmd.Env, "SOPS_AGE_KEY_FILE="+identities)
+	if req.IdentityPath != "" {
+		cmd.Env = append(cmd.Env, "SOPS_AGE_KEY_FILE="+req.IdentityPath)
 	}
 	plain, err := cmd.Output()
 	if err != nil {
